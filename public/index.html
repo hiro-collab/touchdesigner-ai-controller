@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TouchDesigner Control GUI</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <canvas id="matrix-canvas" aria-hidden="true"></canvas>
+    <main class="stage-shell">
+      <div class="green-stage" aria-hidden="true"></div>
+      <iframe
+        id="aituber-frame"
+        class="aituber-frame"
+        title="AITuber Kit display"
+        allow="camera; microphone; autoplay; fullscreen; display-capture"
+      ></iframe>
+
+      <section class="panel panel-left" data-panel="services">
+        <div class="panel-header">
+          <span class="kicker">SYSTEM BUS</span>
+          <strong>Home Control Stack</strong>
+        </div>
+        <div id="service-grid" class="service-grid"></div>
+      </section>
+
+      <section class="panel panel-right" data-panel="mediapipe">
+        <div class="panel-header">
+          <span class="kicker">GESTURE SENSOR</span>
+          <strong>MediaPipe Sword Sign</strong>
+        </div>
+        <div id="mediapipe-status" class="status-lines"></div>
+      </section>
+
+      <section class="panel panel-bottom-left" data-panel="events">
+        <div class="panel-header">
+          <span class="kicker">MAGIC QUEUE</span>
+          <strong>Home Assistant Events</strong>
+        </div>
+        <div id="magic-banner" class="magic-banner">IDLE</div>
+        <div id="event-log" class="event-log"></div>
+      </section>
+
+      <section class="panel panel-bottom-right" data-panel="controls">
+        <div class="panel-header">
+          <span class="kicker">TOUCHDESIGNER LINK</span>
+          <strong>Control Surface</strong>
+        </div>
+        <div id="td-status" class="status-lines"></div>
+        <div class="controls">
+          <label>
+            Font
+            <input id="font-size" type="range" min="11" max="22" step="1" />
+          </label>
+          <label>
+            Color
+            <input id="accent-color" type="color" />
+          </label>
+          <label class="toggle-row">
+            Rain
+            <input id="matrix-toggle" type="checkbox" />
+          </label>
+          <button id="td-test" type="button">Send TD Ping</button>
+        </div>
+        <div class="shortcuts">
+          <span>H: HUD</span>
+          <span>M: RAIN</span>
+          <span>[ / ]: SIZE</span>
+          <span>C: COLOR</span>
+          <span>T: TD PING</span>
+        </div>
+      </section>
+
+      <div class="stage-safe-zone" aria-hidden="true">
+        <span>AVATAR / MAIN STAGE SAFE ZONE</span>
+      </div>
+      <div class="comment-safe-zone" aria-hidden="true">
+        <span>COMMENT SAFE AREA</span>
+      </div>
+      <button id="hud-pill" class="hud-pill" type="button">HUD OFF - press H</button>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

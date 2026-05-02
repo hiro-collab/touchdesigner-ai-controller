@@ -1,0 +1,17 @@
+# Local environment and logs
+.env
+.env.*
+!.env.example
+*.log
+
+# Runtime/build output
+node_modules/
+.cache/
+.tmp/
+
+# Python caches from TouchDesigner helper modules
+__pycache__/
+*.py[cod]
+
+# TouchDesigner local backups
+Backup/
