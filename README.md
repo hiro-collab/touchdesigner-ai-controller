@@ -23,10 +23,10 @@ http://127.0.0.1:8788
 背景は GreenBack です。AITuber Kit (`http://127.0.0.1:3000`) を iframe として全面に読み込み、その上に HUD を重ねます。
 文字の雨は標準 OFF です。
 
-より安定した配信用の同一画面は AITuber Kit 側の専用ページを使います。
+より安定した投影映像ソースは AITuber Kit 側の Projection Visual ページを使います。
 
 ```text
-http://127.0.0.1:3000/touchdesigner-stage
+http://127.0.0.1:3000/projection-visual
 ```
 
 ショートカット:
