@@ -16,3 +16,6 @@ __pycache__/
 # TouchDesigner local backups
 Backup/
 *.[0-9][0-9].toe
+*.toe.dir/
+*.toe.toc
+touchdesigner/expanded/

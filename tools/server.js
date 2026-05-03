@@ -21,8 +21,11 @@ const parseIntArg = (name, fallback) => {
   return Number.isInteger(value) ? value : fallback
 }
 
+const PROJECT_ROOT = path.resolve(__dirname, '..')
+const DEFAULT_WORKSPACE_ROOT = path.resolve(PROJECT_ROOT, '..')
+
 const WORKSPACE_ROOT = path.resolve(
-  readArg('--workspace', process.env.HOME_CONTROL_WORKSPACE_ROOT || path.join(__dirname, '..'))
+  readArg('--workspace', process.env.HOME_CONTROL_WORKSPACE_ROOT || DEFAULT_WORKSPACE_ROOT)
 )
 const HOST = readArg('--host', process.env.TOUCHDESIGNER_GUI_HOST || '127.0.0.1')
 const PORT = parseIntArg('--port', Number(process.env.TOUCHDESIGNER_GUI_PORT || 8788))
