@@ -240,6 +240,21 @@ const checkTcp = (port, host = '127.0.0.1', timeoutMs = 900) =>
     socket.connect(port, host)
   })
 
+const createMaskedWebSocketCloseFrame = () => {
+  const payload = Buffer.alloc(2)
+  payload.writeUInt16BE(1000, 0)
+  const mask = crypto.randomBytes(4)
+  const maskedPayload = Buffer.alloc(payload.length)
+  for (let index = 0; index < payload.length; index += 1) {
+    maskedPayload[index] = payload[index] ^ mask[index % mask.length]
+  }
+  return Buffer.concat([
+    Buffer.from([0x88, 0x80 | payload.length]),
+    mask,
+    maskedPayload
+  ])
+}
+
 const checkWebSocketHandshake = (port, host = '127.0.0.1', timeoutMs = 900) =>
   new Promise((resolve) => {
     const socket = new net.Socket()
@@ -247,12 +262,20 @@ const checkWebSocketHandshake = (port, host = '127.0.0.1', timeoutMs = 900) =>
     let settled = false
     let response = ''
 
-    const finish = (ok, detail) => {
+    const finish = (ok, detail, options = {}) => {
       if (settled) {
         return
       }
       settled = true
-      socket.destroy()
+      if (options.closeWebSocket && socket.writable) {
+        try {
+          socket.write(createMaskedWebSocketCloseFrame(), () => socket.end())
+        } catch {
+          socket.destroy()
+        }
+      } else {
+        socket.destroy()
+      }
       resolve({ ok, detail })
     }
 
@@ -278,7 +301,7 @@ const checkWebSocketHandshake = (port, host = '127.0.0.1', timeoutMs = 900) =>
       }
       const statusLine = response.split(/\r?\n/, 1)[0] || ''
       if (/^HTTP\/1\.[01] 101\b/.test(statusLine)) {
-        finish(true, 'websocket handshake ok')
+        finish(true, 'websocket handshake ok', { closeWebSocket: true })
       } else if (/^HTTP\/1\.[01] \d+/.test(statusLine)) {
         finish(false, statusLine.trim())
       } else {
