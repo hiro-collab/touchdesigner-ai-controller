@@ -119,13 +119,35 @@ node .\touchdesigner-ai-controller\tools\server.js --workspace C:\Users\kawai\wo
 .\start-home-control-stack.bat -StopExisting
 ```
 
+この一括起動では、MediaPipe は Camera Hub 構成で起動します。
+
+- `mediapipe_camera_hub`: `mediapipe-sword-sign\apps\serve_camera_hub.py`
+
+Camera Hub が `ws://127.0.0.1:8765` で topic envelope を配信し、AITuber Kit 側は `/vision/sword_sign/state` を購読して刀印による録音制御に使います。通常の一括起動では MediaPipe のGUIは開きません。
+
+Camera Hub の topic を目視確認したい場合だけ、次のように監視GUIも起動します。
+
+```powershell
+.\start-home-control-stack.bat -StopExisting -MediapipeMode gui
+```
+
+この場合の追加プロセスは `mediapipe_camera_hub_gui` で、実体は `mediapipe-sword-sign\apps\camera_hub_gui.py` です。監視GUIは配信開始ボタンではないため、必要に応じて `Connect` を押して中身を見ます。
+
+旧 `serve_websocket.py` の直JSON互換で切り分けたい場合だけ、次のように起動します。
+
+```powershell
+.\start-home-control-stack.bat -StopExisting -MediapipeMode headless
+```
+
 表示:
 
 ```text
 http://127.0.0.1:8788
 ```
 
-Web GUI は、各サービスの状態、Dify/Home Control の最近のイベント、TouchDesigner UDP 送信先を表示します。背景は GreenBack で、AITuber Kit (`http://127.0.0.1:3000`) を iframe として全面に読み込み、その上に HUD を重ねます。文字の雨は標準 OFF です。
+Web GUI は、各サービスの状態、Dify/Home Control の最近のイベント、TouchDesigner UDP 送信先を表示します。MediaPipe は `mediapipe_camera_hub` の PID と `ws://127.0.0.1:8765` のWebSocket handshakeで状態判定します。背景は GreenBack で、AITuber Kit (`http://127.0.0.1:3000`) を iframe として全面に読み込み、その上に HUD を重ねます。文字の雨は標準 OFF です。
+
+GUI/API はローカル運用前提です。既定では `127.0.0.1` に bind し、loopback 以外の Origin は CORS 許可しません。別端末から確認する場合だけ `--host 0.0.0.0 --allow-remote` または `TOUCHDESIGNER_GUI_ALLOW_REMOTE=true` を明示してください。プロキシ配下で運用する場合のみ、接続元ヘッダを信頼する `TOUCHDESIGNER_GUI_TRUST_PROXY_HEADERS=true` を使います。
 
 より安定した投影映像ソースは AITuber Kit 側の Projection Visual ページです。
 

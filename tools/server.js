@@ -1,4 +1,5 @@
 const dgram = require('dgram')
+const crypto = require('crypto')
 const fs = require('fs')
 const http = require('http')
 const https = require('https')
@@ -25,13 +26,33 @@ const PROJECT_ROOT = path.resolve(__dirname, '..')
 const DEFAULT_WORKSPACE_ROOT = path.resolve(PROJECT_ROOT, '..')
 
 const WORKSPACE_ROOT = path.resolve(
-  readArg('--workspace', process.env.HOME_CONTROL_WORKSPACE_ROOT || DEFAULT_WORKSPACE_ROOT)
+  readArg(
+    '--workspace',
+    process.env.HOME_CONTROL_WORKSPACE_ROOT || DEFAULT_WORKSPACE_ROOT
+  )
 )
-const HOST = readArg('--host', process.env.TOUCHDESIGNER_GUI_HOST || '127.0.0.1')
-const PORT = parseIntArg('--port', Number(process.env.TOUCHDESIGNER_GUI_PORT || 8788))
+const HOST = readArg(
+  '--host',
+  process.env.TOUCHDESIGNER_GUI_HOST || '127.0.0.1'
+)
+const PORT = parseIntArg(
+  '--port',
+  Number(process.env.TOUCHDESIGNER_GUI_PORT || 8788)
+)
+const ALLOW_REMOTE_GUI =
+  args.includes('--allow-remote') ||
+  process.env.TOUCHDESIGNER_GUI_ALLOW_REMOTE === 'true'
+const TRUST_PROXY_HEADERS =
+  process.env.TOUCHDESIGNER_GUI_TRUST_PROXY_HEADERS === 'true'
+const MEDIAPIPE_PORT = parseIntArg(
+  '--mediapipe-port',
+  Number(process.env.MEDIAPIPE_PORT || 8765)
+)
 const AITUBER_URL = readArg(
   '--aituber-url',
-  process.env.AITUBER_URL || process.env.NEXT_PUBLIC_AITUBER_URL || 'http://127.0.0.1:3000'
+  process.env.AITUBER_URL ||
+    process.env.NEXT_PUBLIC_AITUBER_URL ||
+    'http://127.0.0.1:3000'
 )
 const TOUCHDESIGNER_HOST = readArg(
   '--touchdesigner-host',
@@ -63,10 +84,109 @@ const MIME_TYPES = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
+  '.svg': 'image/svg+xml'
 }
 
 const nowIso = () => new Date().toISOString()
+
+const normalizeIpAddress = (value) => {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+  return normalized.startsWith('::ffff:')
+    ? normalized.slice('::ffff:'.length)
+    : normalized
+}
+
+const isLoopbackHost = (host) => {
+  const normalized = String(host || '').toLowerCase()
+  return (
+    normalized === 'localhost' ||
+    normalized === '::1' ||
+    normalized === '[::1]' ||
+    normalized === '127.0.0.1' ||
+    normalized.startsWith('127.')
+  )
+}
+
+const isLoopbackAddress = (address) => {
+  const normalized = normalizeIpAddress(address)
+  return normalized === '' || isLoopbackHost(normalized)
+}
+
+const getRemoteAddress = (request) => {
+  const forwardedFor = TRUST_PROXY_HEADERS
+    ? request.headers['x-forwarded-for']
+    : ''
+  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
+    return normalizeIpAddress(forwardedFor.split(',')[0])
+  }
+  return normalizeIpAddress(request.socket?.remoteAddress)
+}
+
+const parseHostHeader = (request) => {
+  try {
+    return new URL(`http://${request.headers.host || `${HOST}:${PORT}`}`)
+  } catch {
+    return null
+  }
+}
+
+const isTrustedOrigin = (request) => {
+  const originHeader = request.headers.origin
+  if (!originHeader) {
+    return true
+  }
+  if (originHeader === 'null') {
+    return false
+  }
+  try {
+    const origin = new URL(originHeader)
+    if (!['http:', 'https:'].includes(origin.protocol)) {
+      return false
+    }
+    const host = parseHostHeader(request)
+    if (!host) {
+      return isLoopbackHost(origin.hostname)
+    }
+    return (
+      origin.host === host.host ||
+      (isLoopbackHost(origin.hostname) && isLoopbackHost(host.hostname))
+    )
+  } catch {
+    return false
+  }
+}
+
+const buildCorsHeaders = (request) => {
+  const origin = request.headers.origin
+  if (!origin || !isTrustedOrigin(request)) {
+    return {}
+  }
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    Vary: 'Origin'
+  }
+}
+
+const rejectUntrustedRequest = (request, response) => {
+  if (!ALLOW_REMOTE_GUI && !isLoopbackAddress(getRemoteAddress(request))) {
+    sendJson(
+      response,
+      403,
+      { ok: false, error: 'local_access_required' },
+      request
+    )
+    return true
+  }
+  if (!isTrustedOrigin(request)) {
+    sendJson(response, 403, { ok: false, error: 'untrusted_origin' }, request)
+    return true
+  }
+  return false
+}
 
 const readJsonFile = (filePath) => {
   try {
@@ -120,6 +240,59 @@ const checkTcp = (port, host = '127.0.0.1', timeoutMs = 900) =>
     socket.connect(port, host)
   })
 
+const checkWebSocketHandshake = (port, host = '127.0.0.1', timeoutMs = 900) =>
+  new Promise((resolve) => {
+    const socket = new net.Socket()
+    const key = crypto.randomBytes(16).toString('base64')
+    let settled = false
+    let response = ''
+
+    const finish = (ok, detail) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      socket.destroy()
+      resolve({ ok, detail })
+    }
+
+    socket.setTimeout(timeoutMs)
+    socket.once('connect', () => {
+      socket.write(
+        [
+          'GET / HTTP/1.1',
+          `Host: ${host}:${port}`,
+          'Upgrade: websocket',
+          'Connection: Upgrade',
+          `Sec-WebSocket-Key: ${key}`,
+          'Sec-WebSocket-Version: 13',
+          '',
+          ''
+        ].join('\r\n')
+      )
+    })
+    socket.on('data', (chunk) => {
+      response += chunk.toString('utf8')
+      if (!response.includes('\r\n\r\n')) {
+        return
+      }
+      const statusLine = response.split(/\r?\n/, 1)[0] || ''
+      if (/^HTTP\/1\.[01] 101\b/.test(statusLine)) {
+        finish(true, 'websocket handshake ok')
+      } else if (/^HTTP\/1\.[01] \d+/.test(statusLine)) {
+        finish(false, statusLine.trim())
+      } else {
+        finish(false, 'invalid websocket response')
+      }
+    })
+    socket.once('timeout', () => finish(false, 'timeout'))
+    socket.once('error', (error) => finish(false, error.message))
+    socket.once('close', () =>
+      finish(false, 'closed before websocket handshake')
+    )
+    socket.connect(port, host)
+  })
+
 const checkHttp = (urlString, timeoutMs = 1600, jsonHealth = false) =>
   new Promise((resolve) => {
     const startedAt = Date.now()
@@ -127,7 +300,12 @@ const checkHttp = (urlString, timeoutMs = 1600, jsonHealth = false) =>
     try {
       url = new URL(urlString)
     } catch {
-      resolve({ ok: false, statusCode: null, detail: 'invalid url', latencyMs: 0 })
+      resolve({
+        ok: false,
+        statusCode: null,
+        detail: 'invalid url',
+        latencyMs: 0
+      })
       return
     }
 
@@ -136,7 +314,7 @@ const checkHttp = (urlString, timeoutMs = 1600, jsonHealth = false) =>
       url,
       {
         method: 'GET',
-        timeout: timeoutMs,
+        timeout: timeoutMs
       },
       (response) => {
         const chunks = []
@@ -164,7 +342,7 @@ const checkHttp = (urlString, timeoutMs = 1600, jsonHealth = false) =>
             ok,
             statusCode,
             detail,
-            latencyMs: Date.now() - startedAt,
+            latencyMs: Date.now() - startedAt
           })
         })
       }
@@ -178,7 +356,7 @@ const checkHttp = (urlString, timeoutMs = 1600, jsonHealth = false) =>
         ok: false,
         statusCode: null,
         detail: error.message,
-        latencyMs: Date.now() - startedAt,
+        latencyMs: Date.now() - startedAt
       })
     })
     request.end()
@@ -200,7 +378,14 @@ const serviceState = ({ processAlive, tcpOk, httpOk, requireHttp = false }) => {
   return 'DOWN'
 }
 
-const makeService = ({ name, entry, tcp, http, requireHttp = false, detail = '' }) => {
+const makeService = ({
+  name,
+  entry,
+  tcp,
+  http,
+  requireHttp = false,
+  detail = ''
+}) => {
   const processAlive = isProcessAlive(Number(entry?.pid))
   const tcpOk = Boolean(tcp?.ok)
   const httpOk = Boolean(http?.ok)
@@ -211,7 +396,7 @@ const makeService = ({ name, entry, tcp, http, requireHttp = false, detail = '' 
     pid: Number(entry?.pid) || null,
     tcp: tcp || { ok: false, detail: '-' },
     http: http || { ok: false, detail: '-' },
-    detail,
+    detail
   }
 }
 
@@ -254,7 +439,7 @@ const withAge = (payload) => {
   const updatedAt = Date.parse(payload.updated_at)
   return {
     ...payload,
-    age_ms: Number.isFinite(updatedAt) ? Date.now() - updatedAt : null,
+    age_ms: Number.isFinite(updatedAt) ? Date.now() - updatedAt : null
   }
 }
 
@@ -263,14 +448,16 @@ const summarizePipeline = (lastDifyEvent, lastHomeEvent) => {
     return {
       stage: 'WAITING_FOR_INPUT',
       detail: 'No AITuber -> Dify request has been recorded yet.',
-      updated_at: lastHomeEvent?.timestamp || null,
+      updated_at: lastHomeEvent?.timestamp || null
     }
   }
 
   const difyAt = Date.parse(lastDifyEvent.timestamp || '')
   const homeAt = Date.parse(lastHomeEvent?.timestamp || '')
   const homeAfterDify =
-    Number.isFinite(difyAt) && Number.isFinite(homeAt) && homeAt >= difyAt - 1000
+    Number.isFinite(difyAt) &&
+    Number.isFinite(homeAt) &&
+    homeAt >= difyAt - 1000
 
   if (
     ['config_error', 'request_failed', 'request_exception'].includes(
@@ -283,7 +470,7 @@ const summarizePipeline = (lastDifyEvent, lastHomeEvent) => {
         lastDifyEvent.detail ||
         lastDifyEvent.status_text ||
         `Dify event: ${lastDifyEvent.event}`,
-      updated_at: lastDifyEvent.timestamp || null,
+      updated_at: lastDifyEvent.timestamp || null
     }
   }
 
@@ -291,7 +478,7 @@ const summarizePipeline = (lastDifyEvent, lastHomeEvent) => {
     return {
       stage: 'DIFY_REQUESTING',
       detail: lastDifyEvent.query || 'Waiting for Dify response.',
-      updated_at: lastDifyEvent.timestamp || null,
+      updated_at: lastDifyEvent.timestamp || null
     }
   }
 
@@ -299,7 +486,7 @@ const summarizePipeline = (lastDifyEvent, lastHomeEvent) => {
     return {
       stage: 'HOME_ACTION_SUCCEEDED',
       detail: `${lastHomeEvent.action_id || '-'} / ${lastHomeEvent.user_text || ''}`,
-      updated_at: lastHomeEvent.timestamp || null,
+      updated_at: lastHomeEvent.timestamp || null
     }
   }
 
@@ -309,16 +496,15 @@ const summarizePipeline = (lastDifyEvent, lastHomeEvent) => {
       lastDifyEvent.event === 'stream_opened'
         ? 'Dify stream opened; waiting for workflow/tool side effect.'
         : lastDifyEvent.query || `Dify event: ${lastDifyEvent.event}`,
-    updated_at: lastDifyEvent.timestamp || null,
+    updated_at: lastDifyEvent.timestamp || null
   }
 }
 
 const getStatus = async () => {
   const pids = readPidMap()
-  const voicevoxUrl = (process.env.VOICEVOX_SERVER_URL || 'http://127.0.0.1:50021').replace(
-    /^http:\/\/localhost(?=:|\/|$)/,
-    'http://127.0.0.1'
-  )
+  const voicevoxUrl = (
+    process.env.VOICEVOX_SERVER_URL || 'http://127.0.0.1:50021'
+  ).replace(/^http:\/\/localhost(?=:|\/|$)/, 'http://127.0.0.1')
   let voicevoxPort = 50021
   try {
     voicevoxPort = Number(new URL(voicevoxUrl).port || 50021)
@@ -335,6 +521,7 @@ const getStatus = async () => {
     difyHttp,
     voicevoxTcp,
     voicevoxHttp,
+    mediapipeWebSocket
   ] = await Promise.all([
     checkTcp(8787),
     checkHttp('http://127.0.0.1:8787/health', 2500, true),
@@ -344,9 +531,13 @@ const getStatus = async () => {
     checkHttp('http://127.0.0.1:8080', 1800),
     checkTcp(voicevoxPort),
     checkHttp(`${voicevoxUrl.replace(/\/$/, '')}/version`, 1800),
+    checkWebSocketHandshake(MEDIAPIPE_PORT)
   ])
 
-  const mediapipeEntry = pids.mediapipe_gui || pids.mediapipe_ws
+  const mediapipeEntry =
+    pids.mediapipe_camera_hub ||
+    pids.mediapipe_camera_hub_gui ||
+    pids.mediapipe_ws
   const mediapipeStatus = withAge(readJsonFile(MEDIAPIPE_STATUS_FILE))
   const mediapipeStatusFresh =
     typeof mediapipeStatus?.age_ms === 'number' && mediapipeStatus.age_ms < 5000
@@ -355,10 +546,10 @@ const getStatus = async () => {
     typeof mediapipeStatus?.websocket === 'string' &&
     mediapipeStatus.websocket.toLowerCase().startsWith('listening')
   const mediapipeTcp = {
-    ok: mediapipeReportedListening,
+    ok: mediapipeReportedListening || Boolean(mediapipeWebSocket?.ok),
     detail: mediapipeReportedListening
       ? 'reported listening by GUI status'
-      : 'waiting for fresh GUI status',
+      : mediapipeWebSocket?.detail || 'waiting for MediaPipe WebSocket'
   }
   const services = {
     home_assistant_bridge: makeService({
@@ -366,7 +557,7 @@ const getStatus = async () => {
       entry: pids.home_assistant_bridge,
       tcp: homeTcp,
       http: homeHttp,
-      requireHttp: true,
+      requireHttp: true
     }),
     mediapipe: makeService({
       name: 'mediapipe',
@@ -374,30 +565,30 @@ const getStatus = async () => {
       tcp: mediapipeTcp,
       http: { ok: false, detail: '-' },
       detail: mediapipeTcp.ok
-        ? 'ws://127.0.0.1:8765 listening'
-        : 'GUI is open but Start may not be pressed',
+        ? `ws://127.0.0.1:${MEDIAPIPE_PORT} listening`
+        : 'waiting for MediaPipe WebSocket'
     }),
     aituber_kit: makeService({
       name: 'aituber_kit',
       entry: pids.aituber_kit,
       tcp: aituberTcp,
       http: aituberHttp,
-      requireHttp: true,
+      requireHttp: true
     }),
     dify: makeService({
       name: 'dify',
       entry: null,
       tcp: difyTcp,
       http: difyHttp,
-      requireHttp: true,
+      requireHttp: true
     }),
     voicevox: makeService({
       name: 'voicevox',
       entry: null,
       tcp: voicevoxTcp,
       http: voicevoxHttp,
-      requireHttp: true,
-    }),
+      requireHttp: true
+    })
   }
 
   const events = readRecentHomeActionEvents()
@@ -418,38 +609,36 @@ const getStatus = async () => {
       udpHost: TOUCHDESIGNER_HOST,
       udpPort: TOUCHDESIGNER_PORT,
       state: 'UDP_READY',
-      detail: 'UDP receiver cannot be health-checked; test packets can be sent.',
+      detail: 'UDP receiver cannot be health-checked; test packets can be sent.'
     },
     aituber: {
-      url: AITUBER_URL,
+      url: AITUBER_URL
     },
     services,
     mediapipe: mediapipeStatus,
     homeActions: {
       events,
-      lastEvent,
+      lastEvent
     },
     difyChat: {
       events: difyEvents,
-      lastEvent: lastDifyEvent,
+      lastEvent: lastDifyEvent
     },
     pipeline: summarizePipeline(lastDifyEvent, lastEvent),
     magic: {
       active: magicActive,
       lastActionId: lastEvent?.action_id || null,
       lastUserText: lastEvent?.user_text || null,
-      lastEventAt: lastEvent?.timestamp || null,
-    },
+      lastEventAt: lastEvent?.timestamp || null
+    }
   }
 }
 
-const sendJson = (response, statusCode, payload) => {
+const sendJson = (response, statusCode, payload, request) => {
   response.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    ...(request ? buildCorsHeaders(request) : {})
   })
   response.end(JSON.stringify(payload))
 }
@@ -462,7 +651,7 @@ const sendTouchDesignerTest = () =>
         type: 'home_control_magic',
         event: 'gui_test',
         source: 'touchdesigner_control_gui',
-        timestamp: nowIso(),
+        timestamp: nowIso()
       })
     )
     socket.send(payload, TOUCHDESIGNER_PORT, TOUCHDESIGNER_HOST, (error) => {
@@ -471,18 +660,21 @@ const sendTouchDesignerTest = () =>
         ok: !error,
         host: TOUCHDESIGNER_HOST,
         port: TOUCHDESIGNER_PORT,
-        error: error ? error.message : null,
+        error: error ? error.message : null
       })
     })
   })
 
 const serveStatic = (request, response) => {
-  const requestUrl = new URL(request.url, `http://${request.headers.host || HOST}`)
-  const pathname = requestUrl.pathname === '/' ? '/index.html' : requestUrl.pathname
-  const normalized = path.normalize(pathname).replace(/^(\.\.[/\\])+/, '')
-  const filePath = path.join(PUBLIC_DIR, normalized)
+  const requestUrl = new URL(
+    request.url,
+    `http://${request.headers.host || HOST}`
+  )
+  const pathname =
+    requestUrl.pathname === '/' ? '/index.html' : requestUrl.pathname
+  const filePath = resolvePublicFile(pathname)
 
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  if (!filePath) {
     response.writeHead(403)
     response.end('Forbidden')
     return
@@ -495,43 +687,82 @@ const serveStatic = (request, response) => {
       return
     }
     response.writeHead(200, {
-      'Content-Type': MIME_TYPES[path.extname(filePath)] || 'application/octet-stream',
-      'Cache-Control': 'no-store',
+      'Content-Type':
+        MIME_TYPES[path.extname(filePath)] || 'application/octet-stream',
+      'Cache-Control': 'no-store'
     })
     response.end(data)
   })
 }
 
+const resolvePublicFile = (pathname) => {
+  let decoded
+  try {
+    decoded = decodeURIComponent(pathname)
+  } catch {
+    return null
+  }
+  const normalized = path.posix.normalize(decoded).replace(/^\/+/, '')
+  if (
+    !normalized ||
+    normalized.startsWith('../') ||
+    normalized.includes('/../')
+  ) {
+    return null
+  }
+  const filePath = path.resolve(PUBLIC_DIR, normalized)
+  const relative = path.relative(PUBLIC_DIR, filePath)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    return null
+  }
+  return filePath
+}
+
 const server = http.createServer(async (request, response) => {
   try {
-    const requestUrl = new URL(request.url, `http://${request.headers.host || HOST}`)
+    const requestUrl = new URL(
+      request.url,
+      `http://${request.headers.host || HOST}`
+    )
+    if (rejectUntrustedRequest(request, response)) {
+      return
+    }
     if (request.method === 'OPTIONS') {
-      sendJson(response, 204, {})
+      sendJson(response, 204, {}, request)
       return
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/status') {
-      sendJson(response, 200, await getStatus())
+      sendJson(response, 200, await getStatus(), request)
       return
     }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/touchdesigner/test') {
-      sendJson(response, 200, await sendTouchDesignerTest())
+    if (
+      request.method === 'POST' &&
+      requestUrl.pathname === '/api/touchdesigner/test'
+    ) {
+      sendJson(response, 200, await sendTouchDesignerTest(), request)
       return
     }
     if (request.method === 'GET') {
       serveStatic(request, response)
       return
     }
-    sendJson(response, 405, { ok: false, error: 'method_not_allowed' })
+    sendJson(response, 405, { ok: false, error: 'method_not_allowed' }, request)
   } catch (error) {
-    sendJson(response, 500, {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    })
+    sendJson(
+      response,
+      500,
+      {
+        ok: false,
+        error: 'internal_server_error'
+      },
+      request
+    )
   }
 })
 
 server.listen(PORT, HOST, () => {
   console.log(`TouchDesigner control GUI listening on http://${HOST}:${PORT}`)
+  console.log(`Remote GUI access: ${ALLOW_REMOTE_GUI ? 'enabled' : 'disabled'}`)
   console.log(`AITuber frame: ${AITUBER_URL}`)
   console.log(`Workspace root: ${WORKSPACE_ROOT}`)
   console.log(`State dir: ${STATE_DIR}`)
