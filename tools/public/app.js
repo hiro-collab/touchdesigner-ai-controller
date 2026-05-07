@@ -169,10 +169,23 @@ const renderTouchDesigner = (payload) => {
   ])
 }
 
+const normalizeFrameUrl = (url) => {
+  try {
+    return new URL(url, window.location.href).href
+  } catch {
+    return String(url || '')
+  }
+}
+
 const renderAituberFrame = (payload) => {
   const url = payload?.url || 'http://127.0.0.1:3000'
-  if (aituberFrame.src !== url) {
-    aituberFrame.src = url
+  const normalizedUrl = normalizeFrameUrl(url)
+  const currentUrl =
+    aituberFrame.src && aituberFrame.src !== 'about:blank'
+      ? normalizeFrameUrl(aituberFrame.src)
+      : ''
+  if (currentUrl !== normalizedUrl) {
+    aituberFrame.src = normalizedUrl
   }
 }
 

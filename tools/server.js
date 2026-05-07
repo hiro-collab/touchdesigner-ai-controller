@@ -48,11 +48,15 @@ const MEDIAPIPE_PORT = parseIntArg(
   '--mediapipe-port',
   Number(process.env.MEDIAPIPE_PORT || 8765)
 )
+const ENVIRONMENT_STATE_PORT = parseIntArg(
+  '--environment-state-port',
+  Number(process.env.ENVIRONMENT_STATE_PORT || 8790)
+)
 const AITUBER_URL = readArg(
   '--aituber-url',
   process.env.AITUBER_URL ||
     process.env.NEXT_PUBLIC_AITUBER_URL ||
-    'http://127.0.0.1:3000'
+    'http://127.0.0.1:3000/projection-visual'
 )
 const TOUCHDESIGNER_HOST = readArg(
   '--touchdesigner-host',
@@ -88,6 +92,12 @@ const MIME_TYPES = {
 }
 
 const nowIso = () => new Date().toISOString()
+
+const GESTURE_DISPLAY_NAMES = {
+  sword_sign: 'Sword',
+  victory: 'Victory',
+  none: 'None'
+}
 
 const normalizeIpAddress = (value) => {
   const normalized = String(value || '')
@@ -385,6 +395,50 @@ const checkHttp = (urlString, timeoutMs = 1600, jsonHealth = false) =>
     request.end()
   })
 
+const fetchJson = (urlString, timeoutMs = 1600) =>
+  new Promise((resolve) => {
+    let url
+    try {
+      url = new URL(urlString)
+    } catch {
+      resolve(null)
+      return
+    }
+    const client = url.protocol === 'https:' ? https : http
+    const request = client.request(
+      url,
+      {
+        method: 'GET',
+        timeout: timeoutMs,
+        headers: {
+          'Cache-Control': 'no-store'
+        }
+      },
+      (response) => {
+        const chunks = []
+        response.on('data', (chunk) => chunks.push(chunk))
+        response.on('end', () => {
+          if ((response.statusCode || 0) < 200 || (response.statusCode || 0) >= 400) {
+            resolve(null)
+            return
+          }
+          try {
+            resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+          } catch {
+            resolve(null)
+          }
+        })
+      }
+    )
+    request.once('timeout', () => {
+      request.destroy(new Error('timeout'))
+    })
+    request.once('error', () => {
+      resolve(null)
+    })
+    request.end()
+  })
+
 const serviceState = ({ processAlive, tcpOk, httpOk, requireHttp = false }) => {
   if (processAlive && (tcpOk || httpOk)) {
     return requireHttp && !httpOk ? 'DEGRADED' : 'OK'
@@ -420,6 +474,33 @@ const makeService = ({
     tcp: tcp || { ok: false, detail: '-' },
     http: http || { ok: false, detail: '-' },
     detail
+  }
+}
+
+const serviceFromIndicatorNode = (node, fallback) => {
+  const status = String(node?.status || '').toLowerCase()
+  const state = node?.stale
+    ? 'DEGRADED'
+    : status === 'ok'
+      ? 'OK'
+      : status === 'offline'
+        ? 'DOWN'
+        : 'DEGRADED'
+  return {
+    ...(fallback || {}),
+    name: node?.node_id || fallback?.name || 'unknown',
+    state,
+    processAlive: fallback?.processAlive || false,
+    pid: fallback?.pid || null,
+    tcp: fallback?.tcp || { ok: false, detail: '-' },
+    http: {
+      ok: status === 'ok' && !node?.stale,
+      detail: node?.detail || fallback?.http?.detail || '-'
+    },
+    detail: node?.detail || fallback?.detail || '',
+    metrics: node?.metrics || {},
+    phase: node?.phase || null,
+    observed_at: node?.observed_at || null
   }
 }
 
@@ -463,6 +544,108 @@ const withAge = (payload) => {
   return {
     ...payload,
     age_ms: Number.isFinite(updatedAt) ? Date.now() - updatedAt : null
+  }
+}
+
+const formatConfidence = (value) => {
+  const number = Number(value)
+  return Number.isFinite(number) ? number.toFixed(3) : '0.000'
+}
+
+const gestureDisplayName = (name) =>
+  GESTURE_DISPLAY_NAMES[name] || (name ? String(name) : 'None')
+
+const bestGestureFromMap = (gestures) => {
+  if (!gestures || typeof gestures !== 'object') {
+    return null
+  }
+  let best = null
+  Object.entries(gestures).forEach(([name, signal]) => {
+    const confidence = Number(signal?.confidence)
+    if (!Number.isFinite(confidence)) {
+      return
+    }
+    if (!best || confidence > best.confidence) {
+      best = {
+        name,
+        confidence,
+        active: Boolean(signal?.active)
+      }
+    }
+  })
+  return best
+}
+
+const latestIso = (...values) => {
+  const timestamps = values
+    .map((value) => Date.parse(value || ''))
+    .filter((value) => Number.isFinite(value))
+  if (timestamps.length === 0) {
+    return null
+  }
+  return new Date(Math.max(...timestamps)).toISOString()
+}
+
+const ageMsFromIso = (value) => {
+  const timestamp = Date.parse(value || '')
+  return Number.isFinite(timestamp) ? Math.max(0, Date.now() - timestamp) : null
+}
+
+const mediapipeStatusFromEnvironment = (environmentIndicators, fallbackStatus) => {
+  const environment = environmentIndicators?.environment || {}
+  const vision = environment.vision || {}
+  const cameraState = vision.camera || {}
+  const swordState = vision.sword_sign || {}
+  if (!cameraState.updated_at && !swordState.updated_at) {
+    return fallbackStatus || null
+  }
+
+  const camera = cameraState.camera || {}
+  const capture = cameraState.capture || {}
+  const stableSword = swordState.stable?.gestures?.sword_sign || {}
+  const confidence = Number(swordState.confidence ?? stableSword.confidence)
+  const swordConfidence = formatConfidence(confidence)
+  const bestGesture = swordState.best_gesture || bestGestureFromMap(swordState.gestures)
+  const bestGestureName = bestGesture?.name || 'none'
+  const bestGestureConfidence = formatConfidence(Number(bestGesture?.confidence ?? confidence))
+  const heldFor = Number(stableSword.held_for)
+  const fps = Number(cameraState.fps ?? capture.read_fps)
+  const updatedAt = latestIso(cameraState.updated_at, swordState.updated_at)
+  const cameraHubSource = environment.sources?.camera_hub || {}
+  const sourceStale = Boolean(cameraHubSource.stale || cameraState.stale || swordState.stale)
+  const cameraOpened = camera.opened !== false && cameraState.state !== 'unavailable'
+  const active = Boolean(swordState.active || stableSword.active)
+  const primary = swordState.primary_gesture || (active ? 'sword_sign' : null)
+
+  return {
+    type: 'environment_camera_hub_snapshot',
+    updated_at: updatedAt,
+    age_ms: ageMsFromIso(updatedAt),
+    running: cameraOpened && !sourceStale,
+    capture: sourceStale ? 'Stale' : cameraOpened ? 'Running' : 'Stopped',
+    websocket: sourceStale
+      ? `stale via Environment / Camera Hub ws://127.0.0.1:${MEDIAPIPE_PORT}`
+      : `fresh via Environment / Camera Hub ws://127.0.0.1:${MEDIAPIPE_PORT}`,
+    clients: 'environment_state_server',
+    fps: Number.isFinite(fps) ? fps.toFixed(1) : '-',
+    primary_gesture: gestureDisplayName(primary),
+    best_gesture: `${gestureDisplayName(bestGestureName)} (${bestGestureConfidence})`,
+    sword_raw_state: `${active ? 'active' : 'inactive'} (${swordConfidence})`,
+    sword_confidence: swordConfidence,
+    stable_state: stableSword.active ? 'active' : 'inactive',
+    held_for: Number.isFinite(heldFor) ? `${heldFor.toFixed(2)}s` : '0.00s',
+    last_published_at: swordState.updated_at || null,
+    last_publish_result: sourceStale ? 'snapshot stale' : 'environment snapshot',
+    last_event: stableSword.activated
+      ? 'stable activated'
+      : stableSword.released
+        ? 'stable released'
+        : active
+          ? 'raw active'
+          : 'raw inactive',
+    camera_source: camera.source || capture.source || null,
+    capture_backend: capture.backend || null,
+    frame_id: swordState.frame_id || cameraState.frame_id || null
   }
 }
 
@@ -538,6 +721,8 @@ const getStatus = async () => {
   const [
     homeTcp,
     homeHttp,
+    environmentTcp,
+    environmentHttp,
     aituberTcp,
     aituberHttp,
     difyTcp,
@@ -548,6 +733,8 @@ const getStatus = async () => {
   ] = await Promise.all([
     checkTcp(8787),
     checkHttp('http://127.0.0.1:8787/health', 2500, true),
+    checkTcp(ENVIRONMENT_STATE_PORT),
+    checkHttp(`http://127.0.0.1:${ENVIRONMENT_STATE_PORT}/health`, 1800, true),
     checkTcp(3000),
     checkHttp('http://127.0.0.1:3000', 1800),
     checkTcp(8080),
@@ -556,18 +743,29 @@ const getStatus = async () => {
     checkHttp(`${voicevoxUrl.replace(/\/$/, '')}/version`, 1800),
     checkWebSocketHandshake(MEDIAPIPE_PORT)
   ])
+  const environmentIndicators = await fetchJson(
+    `http://127.0.0.1:${ENVIRONMENT_STATE_PORT}/indicators/current`,
+    1200
+  )
 
   const mediapipeEntry =
+    pids.mediapipe_camera_hub_stack ||
     pids.mediapipe_camera_hub ||
     pids.mediapipe_camera_hub_gui ||
     pids.mediapipe_ws
-  const mediapipeStatus = withAge(readJsonFile(MEDIAPIPE_STATUS_FILE))
+  const mediapipeFileStatus = withAge(readJsonFile(MEDIAPIPE_STATUS_FILE))
+  const mediapipeStatus = mediapipeStatusFromEnvironment(
+    environmentIndicators,
+    mediapipeFileStatus
+  )
   const mediapipeStatusFresh =
     typeof mediapipeStatus?.age_ms === 'number' && mediapipeStatus.age_ms < 5000
   const mediapipeReportedListening =
     mediapipeStatusFresh &&
     typeof mediapipeStatus?.websocket === 'string' &&
-    mediapipeStatus.websocket.toLowerCase().startsWith('listening')
+    (mediapipeStatus.websocket.toLowerCase().startsWith('listening') ||
+      mediapipeStatus.websocket.toLowerCase().startsWith('connected') ||
+      mediapipeStatus.websocket.toLowerCase().startsWith('fresh'))
   const mediapipeTcp = {
     ok: mediapipeReportedListening || Boolean(mediapipeWebSocket?.ok),
     detail: mediapipeReportedListening
@@ -580,6 +778,13 @@ const getStatus = async () => {
       entry: pids.home_assistant_bridge,
       tcp: homeTcp,
       http: homeHttp,
+      requireHttp: true
+    }),
+    environment_state_server: makeService({
+      name: 'environment_state_server',
+      entry: pids.environment_state_server,
+      tcp: environmentTcp,
+      http: environmentHttp,
       requireHttp: true
     }),
     mediapipe: makeService({
@@ -613,6 +818,14 @@ const getStatus = async () => {
       requireHttp: true
     })
   }
+  if (
+    environmentIndicators?.nodes &&
+    typeof environmentIndicators.nodes === 'object'
+  ) {
+    for (const [nodeId, node] of Object.entries(environmentIndicators.nodes)) {
+      services[nodeId] = serviceFromIndicatorNode(node, services[nodeId])
+    }
+  }
 
   const events = readRecentHomeActionEvents()
   const difyEvents = readRecentDifyChatEvents()
@@ -638,6 +851,8 @@ const getStatus = async () => {
       url: AITUBER_URL
     },
     services,
+    environment: environmentIndicators?.environment || null,
+    indicators: environmentIndicators || null,
     mediapipe: mediapipeStatus,
     homeActions: {
       events,
@@ -790,4 +1005,7 @@ server.listen(PORT, HOST, () => {
   console.log(`Workspace root: ${WORKSPACE_ROOT}`)
   console.log(`State dir: ${STATE_DIR}`)
   console.log(`TouchDesigner UDP: ${TOUCHDESIGNER_HOST}:${TOUCHDESIGNER_PORT}`)
+  console.log(
+    `Camera Hub topics: via Environment State Server http://127.0.0.1:${ENVIRONMENT_STATE_PORT}/indicators/current`
+  )
 })
