@@ -36,7 +36,7 @@ The stack starts AITuberKit, Environment State Server, MediaPipe Camera Hub, Dif
 To start only the Web GUI:
 
 ```powershell
-node .\touchdesigner-ai-controller\tools\server.js --workspace C:\Users\kawai\works\sword-voice-agent --port 8788
+node .\touchdesigner-ai-controller\tools\server.js --workspace <workspace> --port 8788
 ```
 
 Default bind is `127.0.0.1`.
