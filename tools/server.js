@@ -82,6 +82,10 @@ const HOME_ACTION_EVENTS_FILE = path.join(
   'events.jsonl'
 )
 const DIFY_CHAT_EVENTS_FILE = path.join(STATE_DIR, 'dify-chat-events.jsonl')
+const THOUGHT_CORE_CHAT_EVENTS_FILE = path.join(
+  STATE_DIR,
+  'thought-core-chat-events.jsonl'
+)
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -536,6 +540,9 @@ const readRecentHomeActionEvents = (limit = 8) =>
 const readRecentDifyChatEvents = (limit = 8) =>
   readRecentJsonlEvents(DIFY_CHAT_EVENTS_FILE, limit)
 
+const readRecentThoughtCoreChatEvents = (limit = 8) =>
+  readRecentJsonlEvents(THOUGHT_CORE_CHAT_EVENTS_FILE, limit)
+
 const withAge = (payload) => {
   if (!payload?.updated_at) {
     return payload
@@ -649,60 +656,124 @@ const mediapipeStatusFromEnvironment = (environmentIndicators, fallbackStatus) =
   }
 }
 
-const summarizePipeline = (lastDifyEvent, lastHomeEvent) => {
-  if (!lastDifyEvent) {
+const tagChatEvents = (events, source) =>
+  events.map((event) => ({
+    ...event,
+    source
+  }))
+
+const latestChatEvent = (difyEvents, thoughtCoreEvents) => {
+  const candidates = [
+    ...tagChatEvents(difyEvents, 'dify'),
+    ...tagChatEvents(thoughtCoreEvents, 'thought-core')
+  ]
+    .map((event) => ({
+      ...event,
+      timestamp_ms: Date.parse(event.timestamp || '')
+    }))
+    .filter((event) => Number.isFinite(event.timestamp_ms))
+    .sort((left, right) => left.timestamp_ms - right.timestamp_ms)
+  return candidates[candidates.length - 1] || null
+}
+
+const chatSourceLabel = (event) =>
+  event?.source === 'thought-core' ? 'Thought Core' : 'Dify'
+
+const chatSourceStage = (event) =>
+  event?.source === 'thought-core' ? 'THOUGHT_CORE' : 'DIFY'
+
+const summarizePipeline = (lastChatEvent, lastHomeEvent) => {
+  if (!lastChatEvent) {
     return {
       stage: 'WAITING_FOR_INPUT',
-      detail: 'No AITuber -> Dify request has been recorded yet.',
+      source: null,
+      event: null,
+      detail: 'No AITuber -> AI request has been recorded yet.',
       updated_at: lastHomeEvent?.timestamp || null
     }
   }
 
-  const difyAt = Date.parse(lastDifyEvent.timestamp || '')
+  const chatAt = Date.parse(lastChatEvent.timestamp || '')
   const homeAt = Date.parse(lastHomeEvent?.timestamp || '')
-  const homeAfterDify =
-    Number.isFinite(difyAt) &&
+  const homeAfterChat =
+    Number.isFinite(chatAt) &&
     Number.isFinite(homeAt) &&
-    homeAt >= difyAt - 1000
+    homeAt >= chatAt - 1000
+  const sourceLabel = chatSourceLabel(lastChatEvent)
+  const sourceStage = chatSourceStage(lastChatEvent)
 
   if (
     ['config_error', 'request_failed', 'request_exception'].includes(
-      lastDifyEvent.event
+      lastChatEvent.event
     )
   ) {
     return {
-      stage: 'AITUBER_TO_DIFY_FAILED',
+      stage: `AITUBER_TO_${sourceStage}_FAILED`,
+      source: lastChatEvent.source,
+      event: lastChatEvent.event,
       detail:
-        lastDifyEvent.detail ||
-        lastDifyEvent.status_text ||
-        `Dify event: ${lastDifyEvent.event}`,
-      updated_at: lastDifyEvent.timestamp || null
+        lastChatEvent.detail ||
+        lastChatEvent.status_text ||
+        `${sourceLabel} event: ${lastChatEvent.event}`,
+      updated_at: lastChatEvent.timestamp || null
     }
   }
 
-  if (lastDifyEvent.event === 'request_started') {
+  if (lastChatEvent.event === 'request_started') {
     return {
-      stage: 'DIFY_REQUESTING',
-      detail: lastDifyEvent.query || 'Waiting for Dify response.',
-      updated_at: lastDifyEvent.timestamp || null
+      stage: `${sourceStage}_REQUESTING`,
+      source: lastChatEvent.source,
+      event: lastChatEvent.event,
+      detail: lastChatEvent.query || `Waiting for ${sourceLabel} response.`,
+      updated_at: lastChatEvent.timestamp || null
     }
   }
 
-  if (homeAfterDify && lastHomeEvent?.event === 'execute_succeeded') {
+  if (lastChatEvent.event === 'stream_opened') {
+    return {
+      stage: `${sourceStage}_STREAMING`,
+      source: lastChatEvent.source,
+      event: lastChatEvent.event,
+      detail: `${sourceLabel} stream opened.`,
+      updated_at: lastChatEvent.timestamp || null
+    }
+  }
+
+  if (homeAfterChat && lastHomeEvent?.event === 'execute_succeeded') {
     return {
       stage: 'HOME_ACTION_SUCCEEDED',
+      source: lastChatEvent.source,
+      event: lastChatEvent.event,
       detail: `${lastHomeEvent.action_id || '-'} / ${lastHomeEvent.user_text || ''}`,
       updated_at: lastHomeEvent.timestamp || null
     }
   }
 
+  if (lastChatEvent.source === 'thought-core') {
+    return {
+      stage:
+        lastChatEvent.event === 'stream_first_answer'
+          ? 'THOUGHT_CORE_RESPONDING'
+          : 'THOUGHT_CORE_RESPONDED',
+      source: lastChatEvent.source,
+      event: lastChatEvent.event,
+      detail:
+        lastChatEvent.answer_preview ||
+        lastChatEvent.query ||
+        `Thought Core event: ${lastChatEvent.event}`,
+      updated_at: lastChatEvent.timestamp || null
+    }
+  }
+
   return {
     stage: 'DIFY_OK_WAITING_HOME_ACTION',
+    source: lastChatEvent.source,
+    event: lastChatEvent.event,
     detail:
-      lastDifyEvent.event === 'stream_opened'
+      lastChatEvent.event === 'stream_opened'
         ? 'Dify stream opened; waiting for workflow/tool side effect.'
-        : lastDifyEvent.query || `Dify event: ${lastDifyEvent.event}`,
-    updated_at: lastDifyEvent.timestamp || null
+        : lastChatEvent.query || `Dify event: ${lastChatEvent.event}`,
+    updated_at: lastChatEvent.timestamp || null
   }
 }
 
@@ -829,8 +900,12 @@ const getStatus = async () => {
 
   const events = readRecentHomeActionEvents()
   const difyEvents = readRecentDifyChatEvents()
+  const thoughtCoreEvents = readRecentThoughtCoreChatEvents()
   const lastEvent = events[events.length - 1] || null
   const lastDifyEvent = difyEvents[difyEvents.length - 1] || null
+  const lastThoughtCoreEvent =
+    thoughtCoreEvents[thoughtCoreEvents.length - 1] || null
+  const lastAiEvent = latestChatEvent(difyEvents, thoughtCoreEvents)
   const lastEventAt = lastEvent?.timestamp ? Date.parse(lastEvent.timestamp) : 0
   const magicActive =
     lastEvent?.event === 'execute_succeeded' &&
@@ -862,7 +937,14 @@ const getStatus = async () => {
       events: difyEvents,
       lastEvent: lastDifyEvent
     },
-    pipeline: summarizePipeline(lastDifyEvent, lastEvent),
+    thoughtCoreChat: {
+      events: thoughtCoreEvents,
+      lastEvent: lastThoughtCoreEvent
+    },
+    aiChat: {
+      lastEvent: lastAiEvent
+    },
+    pipeline: summarizePipeline(lastAiEvent, lastEvent),
     magic: {
       active: magicActive,
       lastActionId: lastEvent?.action_id || null,
