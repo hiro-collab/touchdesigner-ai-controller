@@ -86,6 +86,7 @@ const THOUGHT_CORE_CHAT_EVENTS_FILE = path.join(
   STATE_DIR,
   'thought-core-chat-events.jsonl'
 )
+const CONVERSATION_LOG_FILE = path.join(STATE_DIR, 'conversation-log.jsonl')
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -543,6 +544,9 @@ const readRecentDifyChatEvents = (limit = 8) =>
 const readRecentThoughtCoreChatEvents = (limit = 8) =>
   readRecentJsonlEvents(THOUGHT_CORE_CHAT_EVENTS_FILE, limit)
 
+const readRecentConversationLog = (limit = 16) =>
+  readRecentJsonlEvents(CONVERSATION_LOG_FILE, limit)
+
 const withAge = (payload) => {
   if (!payload?.updated_at) {
     return payload
@@ -901,10 +905,13 @@ const getStatus = async () => {
   const events = readRecentHomeActionEvents()
   const difyEvents = readRecentDifyChatEvents()
   const thoughtCoreEvents = readRecentThoughtCoreChatEvents()
+  const conversationEntries = readRecentConversationLog()
   const lastEvent = events[events.length - 1] || null
   const lastDifyEvent = difyEvents[difyEvents.length - 1] || null
   const lastThoughtCoreEvent =
     thoughtCoreEvents[thoughtCoreEvents.length - 1] || null
+  const lastConversationEntry =
+    conversationEntries[conversationEntries.length - 1] || null
   const lastAiEvent = latestChatEvent(difyEvents, thoughtCoreEvents)
   const lastEventAt = lastEvent?.timestamp ? Date.parse(lastEvent.timestamp) : 0
   const magicActive =
@@ -940,6 +947,10 @@ const getStatus = async () => {
     thoughtCoreChat: {
       events: thoughtCoreEvents,
       lastEvent: lastThoughtCoreEvent
+    },
+    conversationLog: {
+      entries: conversationEntries,
+      lastEntry: lastConversationEntry
     },
     aiChat: {
       lastEvent: lastAiEvent
