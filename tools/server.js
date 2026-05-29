@@ -70,6 +70,19 @@ const STATE_DIR = path.resolve(
   process.env.HOME_CONTROL_STACK_STATE_DIR ||
     path.join(WORKSPACE_ROOT, '.cache', 'home-control-stack')
 )
+const TRUE_ENV_VALUES = new Set(['1', 'true', 'yes', 'on'])
+const DEBUG_TRACE_TEXT_DEFAULT = TRUE_ENV_VALUES.has(
+  String(process.env.DISPLAY_RUNTIME_DEBUG_TRACES || '')
+    .trim()
+    .toLowerCase()
+)
+const DEBUG_TRACE_TEXT_LIMIT = Math.max(
+  0,
+  parseIntArg(
+    '--debug-trace-text-limit',
+    Number(process.env.DISPLAY_RUNTIME_DEBUG_TRACE_TEXT_LIMIT || 1200)
+  )
+)
 
 const PUBLIC_DIR = path.join(__dirname, 'public')
 const PID_FILE = path.join(STATE_DIR, 'pids.json')
@@ -547,6 +560,85 @@ const readRecentThoughtCoreChatEvents = (limit = 8) =>
 const readRecentConversationLog = (limit = 16) =>
   readRecentJsonlEvents(CONVERSATION_LOG_FILE, limit)
 
+const traceTextLength = (value) =>
+  typeof value === 'string' ? value.length : 0
+
+const compactTraceText = (value) => {
+  if (typeof value !== 'string') {
+    return value
+  }
+  if (value.length <= DEBUG_TRACE_TEXT_LIMIT) {
+    return value
+  }
+  const hiddenChars = value.length - DEBUG_TRACE_TEXT_LIMIT
+  return `${value.slice(0, DEBUG_TRACE_TEXT_LIMIT)}... [truncated ${hiddenChars} chars]`
+}
+
+const redactedTraceText = (value) => {
+  const chars = traceTextLength(value)
+  return chars > 0 ? `[debug trace hidden: ${chars} chars]` : ''
+}
+
+const sanitizeTraceTextField = (target, fieldName, debugTraces) => {
+  if (!Object.prototype.hasOwnProperty.call(target, fieldName)) {
+    return
+  }
+  const value = target[fieldName]
+  const chars = traceTextLength(value)
+  target[`${fieldName}_chars`] = chars
+  target[fieldName] = debugTraces
+    ? compactTraceText(value)
+    : redactedTraceText(value)
+  if (!debugTraces && chars > 0) {
+    target.trace_redacted = true
+  }
+}
+
+const sanitizeEventTrace = (event, debugTraces, textFields) => {
+  if (!event || typeof event !== 'object') {
+    return event || null
+  }
+  const sanitized = { ...event }
+  for (const fieldName of textFields) {
+    sanitizeTraceTextField(sanitized, fieldName, debugTraces)
+  }
+  return sanitized
+}
+
+const sanitizeHomeActionEvent = (event, debugTraces) =>
+  sanitizeEventTrace(event, debugTraces, [
+    'user_text',
+    'detail',
+    'status_text',
+    'error'
+  ])
+
+const sanitizeChatEvent = (event, debugTraces) =>
+  sanitizeEventTrace(event, debugTraces, [
+    'query',
+    'answer',
+    'answer_preview',
+    'detail',
+    'status_text',
+    'error'
+  ])
+
+const sanitizeConversationEntry = (entry, debugTraces) =>
+  sanitizeEventTrace(entry, debugTraces, [
+    'text',
+    'query',
+    'answer',
+    'answer_preview',
+    'detail'
+  ])
+
+const debugTracesForRequest = (requestUrl) => {
+  const explicit = String(requestUrl.searchParams.get('debug') || '')
+    .trim()
+    .toLowerCase()
+  return DEBUG_TRACE_TEXT_DEFAULT || TRUE_ENV_VALUES.has(explicit)
+}
+
 const withAge = (payload) => {
   if (!payload?.updated_at) {
     return payload
@@ -781,7 +873,7 @@ const summarizePipeline = (lastChatEvent, lastHomeEvent) => {
   }
 }
 
-const getStatus = async () => {
+const getStatus = async ({ debugTraces = false } = {}) => {
   const pids = readPidMap()
   const voicevoxUrl = (
     process.env.VOICEVOX_SERVER_URL || 'http://127.0.0.1:50021'
@@ -902,10 +994,22 @@ const getStatus = async () => {
     }
   }
 
-  const events = readRecentHomeActionEvents()
-  const difyEvents = readRecentDifyChatEvents()
-  const thoughtCoreEvents = readRecentThoughtCoreChatEvents()
-  const conversationEntries = readRecentConversationLog()
+  const rawEvents = readRecentHomeActionEvents()
+  const rawDifyEvents = readRecentDifyChatEvents()
+  const rawThoughtCoreEvents = readRecentThoughtCoreChatEvents()
+  const rawConversationEntries = readRecentConversationLog()
+  const events = rawEvents.map((event) =>
+    sanitizeHomeActionEvent(event, debugTraces)
+  )
+  const difyEvents = rawDifyEvents.map((event) =>
+    sanitizeChatEvent(event, debugTraces)
+  )
+  const thoughtCoreEvents = rawThoughtCoreEvents.map((event) =>
+    sanitizeChatEvent(event, debugTraces)
+  )
+  const conversationEntries = rawConversationEntries.map((entry) =>
+    sanitizeConversationEntry(entry, debugTraces)
+  )
   const lastEvent = events[events.length - 1] || null
   const lastDifyEvent = difyEvents[difyEvents.length - 1] || null
   const lastThoughtCoreEvent =
@@ -913,15 +1017,22 @@ const getStatus = async () => {
   const lastConversationEntry =
     conversationEntries[conversationEntries.length - 1] || null
   const lastAiEvent = latestChatEvent(difyEvents, thoughtCoreEvents)
-  const lastEventAt = lastEvent?.timestamp ? Date.parse(lastEvent.timestamp) : 0
+  const rawLastEvent = rawEvents[rawEvents.length - 1] || null
+  const lastEventAt = rawLastEvent?.timestamp
+    ? Date.parse(rawLastEvent.timestamp)
+    : 0
   const magicActive =
-    lastEvent?.event === 'execute_succeeded' &&
+    rawLastEvent?.event === 'execute_succeeded' &&
     Number.isFinite(lastEventAt) &&
     Date.now() - lastEventAt < 8500
 
   return {
     ok: true,
     timestamp: nowIso(),
+    traceMode: {
+      debug: debugTraces,
+      text: debugTraces ? 'debug' : 'routine-summary'
+    },
     workspaceRoot: WORKSPACE_ROOT,
     touchdesigner: {
       udpHost: TOUCHDESIGNER_HOST,
@@ -958,9 +1069,14 @@ const getStatus = async () => {
     pipeline: summarizePipeline(lastAiEvent, lastEvent),
     magic: {
       active: magicActive,
-      lastActionId: lastEvent?.action_id || null,
-      lastUserText: lastEvent?.user_text || null,
-      lastEventAt: lastEvent?.timestamp || null
+      lastActionId: rawLastEvent?.action_id || null,
+      lastUserText: debugTraces
+        ? compactTraceText(rawLastEvent?.user_text)
+        : redactedTraceText(rawLastEvent?.user_text),
+      lastUserTextChars: traceTextLength(rawLastEvent?.user_text),
+      traceRedacted:
+        !debugTraces && traceTextLength(rawLastEvent?.user_text) > 0,
+      lastEventAt: rawLastEvent?.timestamp || null
     }
   }
 }
@@ -1063,7 +1179,12 @@ const server = http.createServer(async (request, response) => {
       return
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/status') {
-      sendJson(response, 200, await getStatus(), request)
+      sendJson(
+        response,
+        200,
+        await getStatus({ debugTraces: debugTracesForRequest(requestUrl) }),
+        request
+      )
       return
     }
     if (

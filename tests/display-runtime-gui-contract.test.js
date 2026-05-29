@@ -35,6 +35,20 @@ test('display runtime defaults to passive Projection Visual for projector output
   assert.match(source, /process\.env\.NEXT_PUBLIC_AITUBER_URL/)
 })
 
+test('display runtime status redacts raw trace text unless debug is explicit', () => {
+  const source = readSource('tools', 'server.js')
+
+  assert.match(source, /DISPLAY_RUNTIME_DEBUG_TRACES/)
+  assert.match(source, /debugTracesForRequest/)
+  assert.match(source, /requestUrl\.searchParams\.get\('debug'\)/)
+  assert.match(source, /debug trace hidden/)
+  assert.match(source, /sanitizeHomeActionEvent/)
+  assert.match(source, /sanitizeChatEvent/)
+  assert.match(source, /sanitizeConversationEntry/)
+  assert.match(source, /traceMode/)
+  assert.match(source, /await getStatus\(\{ debugTraces:/)
+})
+
 test('display HUD groups legacy Dify without hiding Display Runtime identity', () => {
   const source = readSource('tools', 'public', 'app.js')
 
