@@ -66,7 +66,7 @@ The Display Runtime GUI displays:
 
 Its long-term data source is Environment State Server `GET /indicators/current`. Streaming Camera Hub topic subscriptions are allowed for live display overlays.
 
-`GET /api/status` is routine-safe by default: raw speech, user queries, assistant text, and conversation-log text are replaced with trace summaries. For local debugging, use `GET /api/status?debug=1` or set `DISPLAY_RUNTIME_DEBUG_TRACES=true`; long debug text is capped by `DISPLAY_RUNTIME_DEBUG_TRACE_TEXT_LIMIT`.
+`GET /api/status` is routine-safe by default: raw speech, user queries, assistant text, local paths, and conversation-log text are replaced with trace summaries. For loopback-only local debugging, use `GET /api/status?debug=1` or set `DISPLAY_RUNTIME_DEBUG_TRACES=true`; long debug text is capped by `DISPLAY_RUNTIME_DEBUG_TRACE_TEXT_LIMIT`.
 
 ## Remote Access
 

@@ -41,12 +41,15 @@ test('display runtime status redacts raw trace text unless debug is explicit', (
   assert.match(source, /DISPLAY_RUNTIME_DEBUG_TRACES/)
   assert.match(source, /debugTracesForRequest/)
   assert.match(source, /requestUrl\.searchParams\.get\('debug'\)/)
+  assert.match(source, /isLoopbackAddress\(getRemoteAddress\(request\)\)/)
   assert.match(source, /debug trace hidden/)
   assert.match(source, /sanitizeHomeActionEvent/)
   assert.match(source, /sanitizeChatEvent/)
   assert.match(source, /sanitizeConversationEntry/)
+  assert.match(source, /workspaceRootSummary/)
+  assert.match(source, /localPathForStatus/)
   assert.match(source, /traceMode/)
-  assert.match(source, /await getStatus\(\{ debugTraces:/)
+  assert.match(source, /debugTracesForRequest\(requestUrl, request\)/)
 })
 
 test('display HUD groups legacy Dify without hiding Display Runtime identity', () => {

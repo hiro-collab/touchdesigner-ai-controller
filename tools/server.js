@@ -632,12 +632,20 @@ const sanitizeConversationEntry = (entry, debugTraces) =>
     'detail'
   ])
 
-const debugTracesForRequest = (requestUrl) => {
+const debugTracesForRequest = (requestUrl, request) => {
   const explicit = String(requestUrl.searchParams.get('debug') || '')
     .trim()
     .toLowerCase()
-  return DEBUG_TRACE_TEXT_DEFAULT || TRUE_ENV_VALUES.has(explicit)
+  const requested = DEBUG_TRACE_TEXT_DEFAULT || TRUE_ENV_VALUES.has(explicit)
+  return requested && isLoopbackAddress(getRemoteAddress(request))
 }
+
+const localPathForStatus = (value, debugTraces) => ({
+  label: path.basename(value || '') || 'workspace',
+  path: debugTraces ? compactTraceText(value) : redactedTraceText(value),
+  path_chars: traceTextLength(value),
+  trace_redacted: !debugTraces && traceTextLength(value) > 0
+})
 
 const withAge = (payload) => {
   if (!payload?.updated_at) {
@@ -1033,7 +1041,10 @@ const getStatus = async ({ debugTraces = false } = {}) => {
       debug: debugTraces,
       text: debugTraces ? 'debug' : 'routine-summary'
     },
-    workspaceRoot: WORKSPACE_ROOT,
+    workspaceRoot: debugTraces
+      ? compactTraceText(WORKSPACE_ROOT)
+      : redactedTraceText(WORKSPACE_ROOT),
+    workspaceRootSummary: localPathForStatus(WORKSPACE_ROOT, debugTraces),
     touchdesigner: {
       udpHost: TOUCHDESIGNER_HOST,
       udpPort: TOUCHDESIGNER_PORT,
@@ -1182,7 +1193,9 @@ const server = http.createServer(async (request, response) => {
       sendJson(
         response,
         200,
-        await getStatus({ debugTraces: debugTracesForRequest(requestUrl) }),
+        await getStatus({
+          debugTraces: debugTracesForRequest(requestUrl, request)
+        }),
         request
       )
       return
