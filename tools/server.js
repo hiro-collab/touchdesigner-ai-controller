@@ -56,7 +56,7 @@ const AITUBER_URL = readArg(
   '--aituber-url',
   process.env.AITUBER_URL ||
     process.env.NEXT_PUBLIC_AITUBER_URL ||
-    'http://127.0.0.1:3000/projection-visual'
+    'http://127.0.0.1:3000/projection-visual?mode=passive'
 )
 const TOUCHDESIGNER_HOST = readArg(
   '--touchdesigner-host',

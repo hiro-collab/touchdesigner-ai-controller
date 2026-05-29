@@ -27,6 +27,14 @@ test('display runtime GUI exposes UDP test state as summary only', () => {
   assert.doesNotMatch(source, /TOKEN|SECRET|PASSWORD/)
 })
 
+test('display runtime defaults to passive Projection Visual for projector output', () => {
+  const source = readSource('tools', 'server.js')
+
+  assert.match(source, /'http:\/\/127\.0\.0\.1:3000\/projection-visual\?mode=passive'/)
+  assert.match(source, /process\.env\.AITUBER_URL/)
+  assert.match(source, /process\.env\.NEXT_PUBLIC_AITUBER_URL/)
+})
+
 test('display HUD groups legacy Dify without hiding Display Runtime identity', () => {
   const source = readSource('tools', 'public', 'app.js')
 
