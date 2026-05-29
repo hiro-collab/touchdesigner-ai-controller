@@ -15,13 +15,13 @@ const context = canvas.getContext('2d')
 const colorPresets = ['#4cc9ff', '#ff3fd2', '#f4ff5c', '#ffffff']
 const storageKey = 'touchdesigner-ai-controller-settings'
 const serviceLabels = {
-  home_assistant_bridge: 'Home control bridge',
+  home_assistant_bridge: 'Action bridge',
   environment_state_server: 'Environment state',
-  mediapipe: 'MediaPipe camera',
-  aituber_kit: 'AITuber Kit',
-  touchdesigner_control_gui: 'Display runtime GUI',
-  dify: 'Legacy Dify runtime',
-  voicevox: 'VOICEVOX',
+  mediapipe: 'Reflex sensor',
+  aituber_kit: 'Expression runtime',
+  touchdesigner_control_gui: 'Display runtime',
+  dify: 'Dify compatibility',
+  voicevox: 'VOICEVOX speech',
   thought_core_api: 'Thought Core API',
   thought_core_watcher: 'Thought Core watcher',
   vision_snapshot_processor: 'Vision snapshot',
@@ -121,6 +121,11 @@ const formatAge = (ageMs) => {
   return `${(ageMs / 1000).toFixed(1)}s`
 }
 
+const normalizeState = (value) => String(value || 'DOWN').toUpperCase()
+
+const shouldShowService = (service) =>
+  !(legacyServices.has(service?.name) && normalizeState(service?.state) === 'DOWN')
+
 const renderKv = (rows) =>
   rows
     .map(
@@ -135,6 +140,7 @@ const renderKv = (rows) =>
 
 const renderServices = (services) => {
   serviceGrid.innerHTML = Object.values(services || {})
+    .filter(shouldShowService)
     .sort((left, right) => {
       const leftLegacy = legacyServices.has(left.name) ? 1 : 0
       const rightLegacy = legacyServices.has(right.name) ? 1 : 0
@@ -156,7 +162,7 @@ const renderServices = (services) => {
             ${escapeHtml(label)}
           </span>
           <span class="service-state">
-            ${escapeHtml(isLegacy ? `${service.state} / legacy` : service.state)}
+            ${escapeHtml(isLegacy ? `${service.state} / compatibility` : service.state)}
           </span>
         </article>
       `
