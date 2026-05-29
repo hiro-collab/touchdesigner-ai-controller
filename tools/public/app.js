@@ -14,6 +14,19 @@ const context = canvas.getContext('2d')
 
 const colorPresets = ['#4cc9ff', '#ff3fd2', '#f4ff5c', '#ffffff']
 const storageKey = 'touchdesigner-ai-controller-settings'
+const serviceLabels = {
+  home_assistant_bridge: 'Home control bridge',
+  environment_state_server: 'Environment state',
+  mediapipe: 'MediaPipe camera',
+  aituber_kit: 'AITuber Kit',
+  touchdesigner_control_gui: 'Display runtime GUI',
+  dify: 'Legacy Dify runtime',
+  voicevox: 'VOICEVOX',
+  thought_core_api: 'Thought Core API',
+  thought_core_watcher: 'Thought Core watcher',
+  vision_snapshot_processor: 'Vision snapshot',
+}
+const legacyServices = new Set(['dify'])
 let state = {
   fontSize: 14,
   accent: colorPresets[0],
@@ -122,17 +135,32 @@ const renderKv = (rows) =>
 
 const renderServices = (services) => {
   serviceGrid.innerHTML = Object.values(services || {})
-    .map(
-      (service) => `
-        <article class="service-card" data-state="${escapeHtml(service.state)}">
+    .sort((left, right) => {
+      const leftLegacy = legacyServices.has(left.name) ? 1 : 0
+      const rightLegacy = legacyServices.has(right.name) ? 1 : 0
+      return (
+        leftLegacy - rightLegacy ||
+        String(left.name).localeCompare(String(right.name))
+      )
+    })
+    .map((service) => {
+      const isLegacy = legacyServices.has(service.name)
+      const label = serviceLabels[service.name] || service.name
+      return `
+        <article
+          class="service-card${isLegacy ? ' service-legacy' : ''}"
+          data-state="${escapeHtml(service.state)}"
+        >
           <span class="service-led"></span>
           <span class="service-name" title="${escapeHtml(service.detail || service.http?.detail)}">
-            ${escapeHtml(service.name)}
+            ${escapeHtml(label)}
           </span>
-          <span class="service-state">${escapeHtml(service.state)}</span>
+          <span class="service-state">
+            ${escapeHtml(isLegacy ? `${service.state} / legacy` : service.state)}
+          </span>
         </article>
       `
-    )
+    })
     .join('')
 }
 
@@ -227,7 +255,7 @@ const refresh = async () => {
   } catch (error) {
     renderServices({
       control_gui: {
-        name: 'control_gui',
+        name: 'display_runtime_gui',
         state: 'DEGRADED',
         detail: error instanceof Error ? error.message : String(error),
       },
@@ -241,13 +269,13 @@ const sendTouchDesignerTest = async () => {
   try {
     const response = await fetch('/api/touchdesigner/test', { method: 'POST' })
     const payload = await response.json()
-    tdTestButton.textContent = payload.ok ? 'TD Ping Sent' : 'TD Ping Failed'
+    tdTestButton.textContent = payload.ok ? 'Display Ping Sent' : 'Display Ping Failed'
   } catch {
-    tdTestButton.textContent = 'TD Ping Failed'
+    tdTestButton.textContent = 'Display Ping Failed'
   } finally {
     setTimeout(() => {
       tdTestButton.disabled = false
-      tdTestButton.textContent = 'Send TD Ping'
+      tdTestButton.textContent = 'Send Display Ping'
     }, 900)
   }
 }

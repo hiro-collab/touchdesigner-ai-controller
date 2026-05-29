@@ -199,6 +199,10 @@ body.matrix-enabled #matrix-canvas {
   background: var(--danger);
 }
 
+.service-card.service-legacy {
+  opacity: 0.74;
+}
+
 .service-name {
   min-width: 0;
   overflow: hidden;

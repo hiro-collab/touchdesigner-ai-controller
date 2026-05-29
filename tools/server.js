@@ -1092,7 +1092,7 @@ const server = http.createServer(async (request, response) => {
 })
 
 server.listen(PORT, HOST, () => {
-  console.log(`TouchDesigner control GUI listening on http://${HOST}:${PORT}`)
+  console.log(`Display runtime GUI listening on http://${HOST}:${PORT}`)
   console.log(`Remote GUI access: ${ALLOW_REMOTE_GUI ? 'enabled' : 'disabled'}`)
   console.log(`AITuber frame: ${AITUBER_URL}`)
   console.log(`Workspace root: ${WORKSPACE_ROOT}`)

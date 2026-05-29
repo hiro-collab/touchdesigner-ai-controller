@@ -55,10 +55,11 @@ TouchDesigner should use the UDP payload to start or fade visual effects. It sho
 
 ## Web GUI
 
-The Web GUI displays:
+The Display Runtime GUI displays:
 
 - module status
-- Dify / Home Control events
+- Home Control events
+- legacy Dify compatibility signals when the old stack profile is active
 - TouchDesigner UDP destination
 - Projection Visual iframe
 - HUD overlays
