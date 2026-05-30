@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
+const Module = require('node:module')
 const path = require('node:path')
 const test = require('node:test')
 
@@ -63,3 +64,201 @@ test('display HUD groups legacy Dify without hiding Display Runtime identity', (
   assert.match(source, /fetch\('\/api\/status', \{ cache: 'no-store' \}\)/)
   assert.match(source, /fetch\('\/api\/touchdesigner\/test', \{ method: 'POST' \}\)/)
 })
+
+test('display runtime UDP command route is testable with a fake UDP sender', async () => {
+  const serverPath = path.join(__dirname, '..', 'tools', 'server.js')
+  const originalLoad = Module._load
+  const originalArgv = process.argv
+  const originalEnv = process.env
+  let capturedHandler = null
+  const udpSends = []
+
+  class FakeSocket {
+    send(payload, port, host, callback) {
+      udpSends.push({
+        payload: JSON.parse(Buffer.from(payload).toString('utf8')),
+        port,
+        host
+      })
+      callback(null)
+    }
+
+    close() {}
+  }
+
+  class FakeServer {
+    listen(_port, _host, callback) {
+      callback?.()
+      return this
+    }
+  }
+
+  Module._load = function patchedLoad(request, parent, isMain) {
+    if (request === 'node:dgram' || request === 'dgram') {
+      return {
+        createSocket(type) {
+          assert.equal(type, 'udp4')
+          return new FakeSocket()
+        }
+      }
+    }
+    if (request === 'node:http' || request === 'http') {
+      return {
+        createServer(handler) {
+          capturedHandler = handler
+          return new FakeServer()
+        }
+      }
+    }
+    return originalLoad.call(this, request, parent, isMain)
+  }
+
+  process.argv = [
+    process.argv[0],
+    serverPath,
+    '--host',
+    '127.0.0.1',
+    '--port',
+    '0',
+    '--touchdesigner-host',
+    '127.0.0.1',
+    '--touchdesigner-port',
+    '19001'
+  ]
+  process.env = {
+    ...originalEnv,
+    HOME_CONTROL_WORKSPACE_ROOT: path.join(__dirname, '..'),
+    HOME_CONTROL_STACK_STATE_DIR: path.join(__dirname, '..', '.cache', 'test')
+  }
+  delete require.cache[require.resolve(serverPath)]
+
+  try {
+    require(serverPath)
+    assert.equal(typeof capturedHandler, 'function')
+
+    const response = await invokeCapturedRoute(capturedHandler, {
+      method: 'POST',
+      url: '/api/touchdesigner/test',
+      headers: { host: '127.0.0.1' },
+      remoteAddress: '127.0.0.1'
+    })
+
+    assert.equal(response.statusCode, 200)
+    assert.deepEqual(response.body, {
+      ok: true,
+      host: '127.0.0.1',
+      port: 19001,
+      error: null
+    })
+    assert.equal(udpSends.length, 1)
+    assert.equal(udpSends[0].host, '127.0.0.1')
+    assert.equal(udpSends[0].port, 19001)
+    assert.equal(udpSends[0].payload.type, 'home_control_magic')
+    assert.equal(udpSends[0].payload.event, 'gui_test')
+    assert.equal(
+      udpSends[0].payload.source,
+      'touchdesigner_control_gui'
+    )
+    assert.match(udpSends[0].payload.timestamp, /^\d{4}-\d{2}-\d{2}T/)
+  } finally {
+    Module._load = originalLoad
+    process.argv = originalArgv
+    process.env = originalEnv
+    delete require.cache[require.resolve(serverPath)]
+  }
+})
+
+test('display runtime rejects untrusted UDP command origins before sending', async () => {
+  const serverPath = path.join(__dirname, '..', 'tools', 'server.js')
+  const originalLoad = Module._load
+  let capturedHandler = null
+  let udpSendCount = 0
+
+  Module._load = function patchedLoad(request, parent, isMain) {
+    if (request === 'node:dgram' || request === 'dgram') {
+      return {
+        createSocket() {
+          return {
+            send() {
+              udpSendCount += 1
+            },
+            close() {}
+          }
+        }
+      }
+    }
+    if (request === 'node:http' || request === 'http') {
+      return {
+        createServer(handler) {
+          capturedHandler = handler
+          return {
+            listen(_port, _host, callback) {
+              callback?.()
+              return this
+            }
+          }
+        }
+      }
+    }
+    return originalLoad.call(this, request, parent, isMain)
+  }
+  delete require.cache[require.resolve(serverPath)]
+
+  try {
+    require(serverPath)
+    const response = await invokeCapturedRoute(capturedHandler, {
+      method: 'POST',
+      url: '/api/touchdesigner/test',
+      headers: {
+        host: '127.0.0.1',
+        origin: 'https://evil.example'
+      },
+      remoteAddress: '127.0.0.1'
+    })
+
+    assert.equal(response.statusCode, 403)
+    assert.equal(response.body.ok, false)
+    assert.equal(response.body.error, 'untrusted_origin')
+    assert.equal(udpSendCount, 0)
+  } finally {
+    Module._load = originalLoad
+    delete require.cache[require.resolve(serverPath)]
+  }
+})
+
+function invokeCapturedRoute(handler, requestOptions) {
+  return new Promise((resolve, reject) => {
+    const response = {
+      statusCode: 200,
+      headers: {},
+      chunks: [],
+      writeHead(statusCode, headers = {}) {
+        this.statusCode = statusCode
+        this.headers = headers
+      },
+      end(chunk = '') {
+        if (chunk) {
+          this.chunks.push(Buffer.from(String(chunk)))
+        }
+        const text = Buffer.concat(this.chunks).toString('utf8')
+        resolve({
+          statusCode: this.statusCode,
+          headers: this.headers,
+          text,
+          body: text ? JSON.parse(text) : null
+        })
+      }
+    }
+    Promise.resolve(
+      handler(
+        {
+          method: requestOptions.method,
+          url: requestOptions.url,
+          headers: requestOptions.headers || {},
+          socket: { remoteAddress: requestOptions.remoteAddress }
+        },
+        response
+      )
+    ).catch(reject)
+  })
+}
