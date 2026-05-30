@@ -226,6 +226,68 @@ test('display runtime rejects untrusted UDP command origins before sending', asy
   }
 })
 
+test('display runtime proxy guard falls back to socket for blank forwarded address', async () => {
+  const serverPath = path.join(__dirname, '..', 'tools', 'server.js')
+  const originalLoad = Module._load
+  const originalArgv = process.argv
+  const originalEnv = process.env
+  let capturedHandler = null
+
+  Module._load = function patchedLoad(request, parent, isMain) {
+    if (request === 'node:http' || request === 'http') {
+      return {
+        createServer(handler) {
+          capturedHandler = handler
+          return {
+            listen(_port, _host, callback) {
+              callback?.()
+              return this
+            }
+          }
+        }
+      }
+    }
+    return originalLoad.call(this, request, parent, isMain)
+  }
+
+  process.argv = [
+    process.argv[0],
+    serverPath,
+    '--host',
+    '127.0.0.1',
+    '--port',
+    '0'
+  ]
+  process.env = {
+    ...originalEnv,
+    TOUCHDESIGNER_GUI_TRUST_PROXY_HEADERS: 'true',
+    TOUCHDESIGNER_GUI_ALLOW_REMOTE: 'false'
+  }
+  delete require.cache[require.resolve(serverPath)]
+
+  try {
+    require(serverPath)
+    const response = await invokeCapturedRoute(capturedHandler, {
+      method: 'GET',
+      url: '/api/status',
+      headers: {
+        host: '127.0.0.1',
+        'x-forwarded-for': ' , 127.0.0.1'
+      },
+      remoteAddress: '203.0.113.10'
+    })
+
+    assert.equal(response.statusCode, 403)
+    assert.equal(response.body.ok, false)
+    assert.equal(response.body.error, 'local_access_required')
+  } finally {
+    Module._load = originalLoad
+    process.argv = originalArgv
+    process.env = originalEnv
+    delete require.cache[require.resolve(serverPath)]
+  }
+})
+
 function invokeCapturedRoute(handler, requestOptions) {
   return new Promise((resolve, reject) => {
     const response = {

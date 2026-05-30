@@ -147,7 +147,10 @@ const getRemoteAddress = (request) => {
     ? request.headers['x-forwarded-for']
     : ''
   if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
-    return normalizeIpAddress(forwardedFor.split(',')[0])
+    const forwardedRemoteAddress = normalizeIpAddress(forwardedFor.split(',')[0])
+    if (forwardedRemoteAddress) {
+      return forwardedRemoteAddress
+    }
   }
   return normalizeIpAddress(request.socket?.remoteAddress)
 }
