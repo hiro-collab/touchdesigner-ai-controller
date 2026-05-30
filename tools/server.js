@@ -1104,27 +1104,57 @@ const sendJson = (response, statusCode, payload, request) => {
   response.end(JSON.stringify(payload))
 }
 
-const sendTouchDesignerTest = () =>
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const sendTouchDesignerPacket = (socket, payload) =>
   new Promise((resolve) => {
-    const socket = dgram.createSocket('udp4')
-    const payload = Buffer.from(
-      JSON.stringify({
-        type: 'home_control_magic',
-        event: 'gui_test',
-        source: 'touchdesigner_control_gui',
-        timestamp: nowIso()
-      })
-    )
-    socket.send(payload, TOUCHDESIGNER_PORT, TOUCHDESIGNER_HOST, (error) => {
-      socket.close()
-      resolve({
-        ok: !error,
-        host: TOUCHDESIGNER_HOST,
-        port: TOUCHDESIGNER_PORT,
-        error: error ? error.message : null
-      })
+    const packet = Buffer.from(JSON.stringify(payload))
+    socket.send(packet, TOUCHDESIGNER_PORT, TOUCHDESIGNER_HOST, (error) => {
+      resolve(error ? error.message : null)
     })
   })
+
+const sendTouchDesignerTest = async () => {
+  const socket = dgram.createSocket('udp4')
+  const actionId = `display_ping_${Date.now()}`
+  const basePayload = {
+    type: 'home_control_magic',
+    event: 'display_link_ping',
+    action_id: actionId,
+    label: 'Display Link Ping',
+    source: 'display_runtime_gui'
+  }
+  const sentPhases = []
+  let error = null
+
+  try {
+    for (const phase of ['start', 'done']) {
+      if (phase === 'done') {
+        await sleep(850)
+      }
+      const phaseError = await sendTouchDesignerPacket(socket, {
+        ...basePayload,
+        phase,
+        timestamp: nowIso()
+      })
+      if (phaseError) {
+        error = phaseError
+        break
+      }
+      sentPhases.push(phase)
+    }
+  } finally {
+    socket.close()
+  }
+
+  return {
+    ok: !error,
+    host: TOUCHDESIGNER_HOST,
+    port: TOUCHDESIGNER_PORT,
+    phases: sentPhases,
+    error
+  }
+}
 
 const serveStatic = (request, response) => {
   const requestUrl = new URL(

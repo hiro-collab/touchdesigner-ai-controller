@@ -22,8 +22,9 @@ test('display runtime GUI exposes UDP test state as summary only', () => {
   const source = readSource('tools', 'server.js')
 
   assert.match(source, /type: 'home_control_magic'/)
-  assert.match(source, /event: 'gui_test'/)
-  assert.match(source, /source: 'touchdesigner_control_gui'/)
+  assert.match(source, /event: 'display_link_ping'/)
+  assert.match(source, /source: 'display_runtime_gui'/)
+  assert.match(source, /for \(const phase of \['start', 'done'\]\)/)
   assert.match(source, /UDP receiver cannot be health-checked/)
   assert.doesNotMatch(source, /TOKEN|SECRET|PASSWORD/)
 })
@@ -148,17 +149,21 @@ test('display runtime UDP command route is testable with a fake UDP sender', asy
       ok: true,
       host: '127.0.0.1',
       port: 19001,
+      phases: ['start', 'done'],
       error: null
     })
-    assert.equal(udpSends.length, 1)
+    assert.equal(udpSends.length, 2)
     assert.equal(udpSends[0].host, '127.0.0.1')
     assert.equal(udpSends[0].port, 19001)
     assert.equal(udpSends[0].payload.type, 'home_control_magic')
-    assert.equal(udpSends[0].payload.event, 'gui_test')
+    assert.equal(udpSends[0].payload.event, 'display_link_ping')
+    assert.equal(udpSends[0].payload.phase, 'start')
+    assert.equal(udpSends[1].payload.phase, 'done')
     assert.equal(
       udpSends[0].payload.source,
-      'touchdesigner_control_gui'
+      'display_runtime_gui'
     )
+    assert.match(udpSends[0].payload.action_id, /^display_ping_/)
     assert.match(udpSends[0].payload.timestamp, /^\d{4}-\d{2}-\d{2}T/)
   } finally {
     Module._load = originalLoad

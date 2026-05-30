@@ -196,8 +196,8 @@ const renderMediapipe = (payload, service) => {
 
 const renderTouchDesigner = (payload) => {
   tdStatus.innerHTML = renderKv([
-    ['UDP Host', payload?.udpHost || '-'],
-    ['UDP Port', payload?.udpPort || '-'],
+    ['Link Host', payload?.udpHost || '-'],
+    ['Link Port', payload?.udpPort || '-'],
     ['State', payload?.state || '-'],
     ['Detail', payload?.detail || '-'],
   ])
@@ -271,17 +271,17 @@ const refresh = async () => {
 
 const sendTouchDesignerTest = async () => {
   tdTestButton.disabled = true
-  tdTestButton.textContent = 'Sending...'
+  tdTestButton.textContent = '送信中...'
   try {
     const response = await fetch('/api/touchdesigner/test', { method: 'POST' })
     const payload = await response.json()
-    tdTestButton.textContent = payload.ok ? 'Display Ping Sent' : 'Display Ping Failed'
+    tdTestButton.textContent = payload.ok ? '送信済み' : '送信失敗'
   } catch {
-    tdTestButton.textContent = 'Display Ping Failed'
+    tdTestButton.textContent = '送信失敗'
   } finally {
     setTimeout(() => {
       tdTestButton.disabled = false
-      tdTestButton.textContent = 'Send Display Ping'
+      tdTestButton.textContent = 'LINK PING'
     }, 900)
   }
 }
