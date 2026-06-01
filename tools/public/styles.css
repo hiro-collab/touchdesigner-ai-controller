@@ -88,9 +88,10 @@ body.matrix-enabled #matrix-canvas {
 .panel {
   position: absolute;
   z-index: 4;
-  width: min(27vw, 370px);
-  min-width: 286px;
-  padding: 14px;
+  width: min(24vw, 330px);
+  min-width: 260px;
+  max-width: calc(50vw - 36px);
+  padding: 11px;
   border: 1px solid var(--accent-mid);
   background:
     linear-gradient(120deg, rgba(255, 255, 255, 0.045), transparent 34%),
@@ -119,48 +120,63 @@ body.matrix-enabled #matrix-canvas {
 }
 
 .panel-left {
-  top: 24px;
-  left: 24px;
+  top: 18px;
+  left: 18px;
 }
 
 .panel-right {
-  top: 24px;
-  right: 24px;
+  top: 18px;
+  right: 18px;
 }
 
 .panel-bottom-left {
-  bottom: 24px;
-  left: 24px;
+  bottom: 18px;
+  left: 18px;
 }
 
 .panel-bottom-right {
-  right: 24px;
-  bottom: 24px;
+  right: 18px;
+  bottom: 18px;
 }
 
 .panel-header {
   display: grid;
   gap: 2px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
   text-transform: uppercase;
 }
 
 .panel-header .kicker {
   color: var(--accent);
-  font-size: 0.78em;
-  letter-spacing: 0.16em;
+  font-size: 0.74em;
+  letter-spacing: 0.08em;
 }
 
 .panel-header strong {
   color: #f2fffb;
-  font-size: 1.08em;
+  font-size: 1em;
   font-weight: 700;
   text-shadow: 0 0 12px var(--accent-soft);
 }
 
+.stage-preview-label {
+  position: absolute;
+  z-index: 4;
+  top: 18px;
+  left: 50%;
+  max-width: min(38vw, 520px);
+  transform: translateX(-50%);
+  border: 1px solid rgba(215, 255, 243, 0.16);
+  background: rgba(0, 0, 0, 0.44);
+  color: rgba(232, 251, 255, 0.78);
+  padding: 6px 10px;
+  font-size: 0.78em;
+  text-transform: uppercase;
+}
+
 .service-grid {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .service-card {
@@ -168,8 +184,8 @@ body.matrix-enabled #matrix-canvas {
   grid-template-columns: 10px 1fr auto;
   gap: 10px;
   align-items: center;
-  min-height: 38px;
-  padding: 8px 10px;
+  min-height: 34px;
+  padding: 6px 9px;
   border: 1px solid rgba(215, 255, 243, 0.12);
   background: rgba(0, 0, 0, 0.58);
 }
@@ -218,15 +234,15 @@ body.matrix-enabled #matrix-canvas {
 
 .status-lines {
   display: grid;
-  gap: 7px;
+  gap: 5px;
 }
 
 .kv {
   display: grid;
   grid-template-columns: minmax(92px, 42%) 1fr;
-  gap: 10px;
+  gap: 8px;
   align-items: baseline;
-  padding-bottom: 5px;
+  padding-bottom: 4px;
   border-bottom: 1px solid rgba(215, 255, 243, 0.11);
 }
 
@@ -248,14 +264,14 @@ body.matrix-enabled #matrix-canvas {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 46px;
-  margin-bottom: 10px;
+  min-height: 38px;
+  margin-bottom: 7px;
   border: 1px solid rgba(215, 255, 243, 0.14);
   background: rgba(0, 0, 0, 0.62);
   color: var(--muted);
-  font-size: 1.22em;
+  font-size: 1.08em;
   font-weight: 800;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.08em;
 }
 
 .magic-banner.active {
@@ -298,9 +314,9 @@ body.matrix-enabled #matrix-canvas {
 .controls {
   display: grid;
   grid-template-columns: 1fr auto auto;
-  gap: 10px 12px;
+  gap: 8px 10px;
   align-items: end;
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 .controls label {
@@ -366,9 +382,9 @@ body.matrix-enabled #matrix-canvas {
   position: absolute;
   z-index: 3;
   top: 11vh;
-  right: 32vw;
+  right: 29vw;
   bottom: 22vh;
-  left: 32vw;
+  left: 29vw;
   border: 1px dashed rgba(215, 255, 243, 0.13);
   pointer-events: none;
 }
@@ -406,7 +422,8 @@ body.matrix-enabled #matrix-canvas {
 
 body.hud-hidden .panel,
 body.hud-hidden .stage-safe-zone,
-body.hud-hidden .comment-safe-zone {
+body.hud-hidden .comment-safe-zone,
+body.hud-hidden .stage-preview-label {
   display: none;
 }
 
@@ -425,7 +442,8 @@ body.hud-hidden .hud-pill {
 
 @media (max-width: 1100px) {
   .panel {
-    width: min(42vw, 360px);
+    width: min(42vw, 320px);
+    max-width: calc(50vw - 32px);
   }
 
   .stage-safe-zone {
