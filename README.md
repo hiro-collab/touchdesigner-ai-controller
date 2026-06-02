@@ -23,20 +23,61 @@ touchdesigner-ai-controller/
 
 The TouchDesigner `.toe` files live under `touchdesigner/`. Generated expansion artifacts should not be treated as hand-written source.
 
-## Start
+## 初期セットアップ
 
-From the workspace root:
+This organ's Web GUI uses Node.js built-in modules only; there is no local
+`package.json` or `npm install` step for `tools/server.js`.
+
+Required local tools/assets:
+
+- Node.js available as `node`.
+- AITuberKit Projection Visual already running when iframe projection checks are needed.
+- Environment State Server available when display-safe indicators are needed.
+- TouchDesigner installed separately if UDP visual triggers are tested.
+
+TouchDesigner `.toe` files are binary project assets. Generated expansion
+artifacts, local logs, `.cache/`, and private display captures are local-only
+unless explicitly reviewed for publication.
+
+## dotenv / local config
+
+There is no standard `.env.example` for this repo. Runtime settings are read
+from CLI args or environment variables such as:
+
+- `HOME_CONTROL_WORKSPACE_ROOT`
+- `TOUCHDESIGNER_GUI_HOST`
+- `TOUCHDESIGNER_GUI_PORT`
+- `TOUCHDESIGNER_UDP_HOST`
+- `TOUCHDESIGNER_UDP_PORT`
+- `AITUBER_URL` / `NEXT_PUBLIC_AITUBER_URL`
+- `DISPLAY_RUNTIME_DEBUG_TRACES`
+
+Keep remote GUI access opt-in with `--allow-remote` or
+`TOUCHDESIGNER_GUI_ALLOW_REMOTE=true`.
+
+## 通常起動
+
+From the Agent OS repository root:
 
 ```powershell
-.\start-home-control-stack.bat -StopExisting
+.\start-home-control-launcher.bat
 ```
 
-The stack starts AITuberKit, Environment State Server, MediaPipe Camera Hub, Dify watcher, and display-runtime pieces as configured.
-
-To start only the Web GUI:
+or:
 
 ```powershell
-node .\touchdesigner-ai-controller\tools\server.js --workspace <workspace> --port 8788
+pwsh -NoProfile -File .\scripts\start-launcher.ps1 -PortMode isolated_override -OpenBrowser
+```
+
+The launcher starts AITuberKit, Environment State Server, MediaPipe Camera Hub,
+Thought Core / Dify compatibility pieces, and display-runtime pieces as
+configured.
+
+To start only the Web GUI for debugging, pass the same workspace root used by
+the launcher:
+
+```powershell
+node .\organs\display\touchdesigner-ai-controller\tools\server.js --workspace . --port 8788
 ```
 
 Default bind is `127.0.0.1`.
