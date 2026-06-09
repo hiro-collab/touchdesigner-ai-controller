@@ -525,6 +525,42 @@ const serviceFromIndicatorNode = (node, fallback) => {
   }
 }
 
+const buildHomeActionMode = () => {
+  const adapter = String(process.env.THOUGHT_CORE_TOOLS_ADAPTER || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, '_')
+
+  if (adapter === 'mock' || adapter === 'no_live' || adapter === 'dry_run') {
+    return {
+      mode: 'mock',
+      label: 'MOCK',
+      detail: '実送信なし',
+      live: false
+    }
+  }
+
+  if (
+    adapter === 'home_control' ||
+    adapter === 'home_assistant' ||
+    adapter === 'live_home'
+  ) {
+    return {
+      mode: 'live_home',
+      label: 'LIVE HOME',
+      detail: '実家電送信',
+      live: true
+    }
+  }
+
+  return {
+    mode: 'unknown',
+    label: 'UNKNOWN',
+    detail: '設定不明',
+    live: false
+  }
+}
+
 const readRecentJsonlEvents = (filePath, limit = 8) => {
   try {
     const stat = fs.statSync(filePath)
@@ -1061,6 +1097,7 @@ const getStatus = async ({ debugTraces = false } = {}) => {
     environment: environmentIndicators?.environment || null,
     indicators: environmentIndicators || null,
     mediapipe: mediapipeStatus,
+    homeActionMode: buildHomeActionMode(),
     homeActions: {
       events,
       lastEvent
