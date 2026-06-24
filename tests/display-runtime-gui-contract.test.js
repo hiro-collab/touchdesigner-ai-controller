@@ -10,7 +10,8 @@ const readSource = (...segments) =>
 test('display runtime GUI keeps local-only HTTP guard and status endpoints', () => {
   const source = readSource('tools', 'server.js')
 
-  assert.match(source, /process\.env\.TOUCHDESIGNER_GUI_HOST \|\| '127\.0\.0\.1'/)
+  assert.match(source, /DEFAULT_HOSTS = \{\s+loopback: '127\.0\.0\.1'\s+\}/)
+  assert.match(source, /process\.env\.TOUCHDESIGNER_GUI_HOST \|\| DEFAULT_HOSTS\.loopback/)
   assert.match(source, /process\.env\.TOUCHDESIGNER_GUI_ALLOW_REMOTE === 'true'/)
   assert.match(source, /local_access_required/)
   assert.match(source, /untrusted_origin/)
@@ -32,9 +33,14 @@ test('display runtime GUI exposes UDP test state as summary only', () => {
 test('display runtime defaults to passive Projection Visual for projector output', () => {
   const source = readSource('tools', 'server.js')
 
-  assert.match(source, /'http:\/\/127\.0\.0\.1:3000\/projection-visual\?mode=passive'/)
+  assert.match(source, /AITUBER_HOST/)
+  assert.match(source, /AITUBER_PORT/)
+  assert.match(source, /AITUBER_STATUS_TARGET/)
+  assert.match(source, /projection-visual\?mode=passive&hud=0/)
   assert.match(source, /process\.env\.AITUBER_URL/)
   assert.match(source, /process\.env\.NEXT_PUBLIC_AITUBER_URL/)
+  assert.doesNotMatch(source, /checkTcp\(3000\)/)
+  assert.doesNotMatch(source, /checkHttp\('http:\/\/127\.0\.0\.1:3000'/)
 })
 
 test('display runtime status redacts raw trace text unless debug is explicit', () => {
@@ -54,14 +60,52 @@ test('display runtime status redacts raw trace text unless debug is explicit', (
   assert.match(source, /debugTracesForRequest\(requestUrl, request\)/)
 })
 
-test('display HUD groups legacy Dify without hiding Display Runtime identity', () => {
+test('display runtime forwards Thought Core service telemetry when observed', () => {
+  const source = readSource('tools', 'server.js')
+
+  assert.match(source, /THOUGHT_CORE_HOST/)
+  assert.match(source, /THOUGHT_CORE_PORT/)
+  assert.match(source, /HOME_ASSISTANT_BRIDGE_HOST/)
+  assert.match(source, /HOME_ASSISTANT_BRIDGE_PORT/)
+  assert.match(source, /ENVIRONMENT_STATE_HOST/)
+  assert.match(source, /ENVIRONMENT_STATE_PORT/)
+  assert.match(source, /checkTcp\(HOME_ASSISTANT_BRIDGE_PORT, HOME_ASSISTANT_BRIDGE_HOST\)/)
+  assert.match(source, /checkTcp\(ENVIRONMENT_STATE_PORT, ENVIRONMENT_STATE_HOST\)/)
+  assert.match(source, /checkTcp\(THOUGHT_CORE_PORT, THOUGHT_CORE_HOST\)/)
+  assert.match(source, /\/health/)
+  assert.match(source, /summarizeThoughtCoreTcpProbe/)
+  assert.match(source, /summarizeThoughtCoreHealthProbe/)
+  assert.match(source, /detail: 'health ok'/)
+  assert.match(source, /detail: 'health unavailable'/)
+  assert.match(source, /detail: 'tcp listening'/)
+  assert.match(source, /detail: 'tcp unavailable'/)
+  assert.match(source, /detail = ok \? 'health ok' : 'health unavailable'/)
+  assert.match(source, /return \{ ok: true, detail: 'tcp listening', latencyMs \}/)
+  assert.match(source, /return \{ ok: true, statusCode, detail: 'health ok', latencyMs \}/)
+  assert.doesNotMatch(source, /JSON\.stringify\(parsed\)/)
+  assert.doesNotMatch(source, /return \{ \.\.\.probe, detail:/)
+  assert.match(source, /thoughtCoreApiTelemetryPresent/)
+  assert.match(source, /pids\.thought_core_api/)
+  assert.match(source, /services\.thought_core_api = makeService/)
+  assert.match(source, /tcp: summarizeThoughtCoreTcpProbe\(thoughtCoreTcp\)/)
+  assert.match(source, /http: summarizeThoughtCoreHealthProbe\(thoughtCoreHttp\)/)
+  assert.doesNotMatch(source, /http: thoughtCoreHttp,\s+requireHttp: true/)
+  assert.doesNotMatch(source, /checkTcp\(8787\)/)
+  assert.doesNotMatch(source, /127\.0\.0\.1:8787/)
+  assert.match(source, /pids\.thought_core_watcher/)
+  assert.match(source, /services\.thought_core_watcher = makeService/)
+  assert.match(source, /processOnlyOk: true/)
+})
+
+test('display HUD exposes canonical runtime services without legacy Dify grouping', () => {
   const source = readSource('tools', 'public', 'app.js')
+  const styles = readSource('tools', 'public', 'styles.css')
 
   assert.match(source, /touchdesigner_control_gui: 'Display runtime'/)
-  assert.match(source, /dify: 'Dify compatibility'/)
-  assert.match(source, /const legacyServices = new Set\(\['dify'\]\)/)
-  assert.match(source, /service-legacy/)
-  assert.match(source, /legacy/)
+  assert.match(source, /payload\?\.url \|\| 'about:blank'/)
+  assert.doesNotMatch(source, /Dify compatibility|legacyServices|service-legacy/)
+  assert.doesNotMatch(source, /http:\/\/127\.0\.0\.1:3000/)
+  assert.doesNotMatch(styles, /service-legacy/)
   assert.match(source, /fetch\('\/api\/status', \{ cache: 'no-store' \}\)/)
   assert.match(source, /fetch\('\/api\/touchdesigner\/test', \{ method: 'POST' \}\)/)
 })

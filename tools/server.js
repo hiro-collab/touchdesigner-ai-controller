@@ -24,6 +24,18 @@ const parseIntArg = (name, fallback) => {
 
 const PROJECT_ROOT = path.resolve(__dirname, '..')
 const DEFAULT_WORKSPACE_ROOT = path.resolve(PROJECT_ROOT, '..')
+const DEFAULT_HOSTS = {
+  loopback: '127.0.0.1'
+}
+const DEFAULT_PORTS = {
+  displayRuntimeGui: 8788,
+  mediapipe: 8765,
+  homeAssistantBridge: 8787,
+  environmentState: 8790,
+  thoughtCore: 18787,
+  aituber: 3000,
+  touchdesignerUdp: 9001
+}
 
 const WORKSPACE_ROOT = path.resolve(
   readArg(
@@ -33,11 +45,11 @@ const WORKSPACE_ROOT = path.resolve(
 )
 const HOST = readArg(
   '--host',
-  process.env.TOUCHDESIGNER_GUI_HOST || '127.0.0.1'
+  process.env.TOUCHDESIGNER_GUI_HOST || DEFAULT_HOSTS.loopback
 )
 const PORT = parseIntArg(
   '--port',
-  Number(process.env.TOUCHDESIGNER_GUI_PORT || 8788)
+  Number(process.env.TOUCHDESIGNER_GUI_PORT || DEFAULT_PORTS.displayRuntimeGui)
 )
 const ALLOW_REMOTE_GUI =
   args.includes('--allow-remote') ||
@@ -46,25 +58,57 @@ const TRUST_PROXY_HEADERS =
   process.env.TOUCHDESIGNER_GUI_TRUST_PROXY_HEADERS === 'true'
 const MEDIAPIPE_PORT = parseIntArg(
   '--mediapipe-port',
-  Number(process.env.MEDIAPIPE_PORT || 8765)
+  Number(process.env.MEDIAPIPE_PORT || DEFAULT_PORTS.mediapipe)
+)
+const MEDIAPIPE_HOST = readArg(
+  '--mediapipe-host',
+  process.env.MEDIAPIPE_HOST || DEFAULT_HOSTS.loopback
+)
+const HOME_ASSISTANT_BRIDGE_HOST = readArg(
+  '--home-assistant-bridge-host',
+  process.env.HOME_ASSISTANT_BRIDGE_HOST || DEFAULT_HOSTS.loopback
+)
+const HOME_ASSISTANT_BRIDGE_PORT = parseIntArg(
+  '--home-assistant-bridge-port',
+  Number(process.env.HOME_ASSISTANT_BRIDGE_PORT || DEFAULT_PORTS.homeAssistantBridge)
+)
+const ENVIRONMENT_STATE_HOST = readArg(
+  '--environment-state-host',
+  process.env.ENVIRONMENT_STATE_HOST || DEFAULT_HOSTS.loopback
 )
 const ENVIRONMENT_STATE_PORT = parseIntArg(
   '--environment-state-port',
-  Number(process.env.ENVIRONMENT_STATE_PORT || 8790)
+  Number(process.env.ENVIRONMENT_STATE_PORT || DEFAULT_PORTS.environmentState)
+)
+const THOUGHT_CORE_HOST = readArg(
+  '--thought-core-host',
+  process.env.THOUGHT_CORE_HOST || DEFAULT_HOSTS.loopback
+)
+const THOUGHT_CORE_PORT = parseIntArg(
+  '--thought-core-port',
+  Number(process.env.THOUGHT_CORE_PORT || DEFAULT_PORTS.thoughtCore)
+)
+const AITUBER_HOST = readArg(
+  '--aituber-host',
+  process.env.AITUBER_HOST || DEFAULT_HOSTS.loopback
+)
+const AITUBER_PORT = parseIntArg(
+  '--aituber-port',
+  Number(process.env.AITUBER_PORT || DEFAULT_PORTS.aituber)
 )
 const AITUBER_URL = readArg(
   '--aituber-url',
   process.env.AITUBER_URL ||
     process.env.NEXT_PUBLIC_AITUBER_URL ||
-    'http://127.0.0.1:3000/projection-visual?mode=passive&hud=0'
+    `http://${AITUBER_HOST}:${AITUBER_PORT}/projection-visual?mode=passive&hud=0`
 )
 const TOUCHDESIGNER_HOST = readArg(
   '--touchdesigner-host',
-  process.env.TOUCHDESIGNER_UDP_HOST || '127.0.0.1'
+  process.env.TOUCHDESIGNER_UDP_HOST || DEFAULT_HOSTS.loopback
 )
 const TOUCHDESIGNER_PORT = parseIntArg(
   '--touchdesigner-port',
-  Number(process.env.TOUCHDESIGNER_UDP_PORT || 9001)
+  Number(process.env.TOUCHDESIGNER_UDP_PORT || DEFAULT_PORTS.touchdesignerUdp)
 )
 const STATE_DIR = path.resolve(
   process.env.HOME_CONTROL_STACK_STATE_DIR ||
@@ -84,6 +128,33 @@ const DEBUG_TRACE_TEXT_LIMIT = Math.max(
   )
 )
 
+const httpServiceTargetFromUrl = (urlString, fallbackHost, fallbackPort) => {
+  try {
+    const url = new URL(urlString)
+    const protocol = url.protocol === 'https:' ? 'https:' : 'http:'
+    const port =
+      Number(url.port) ||
+      (protocol === 'https:' ? 443 : 80)
+    return {
+      host: url.hostname || fallbackHost,
+      port,
+      origin: `${protocol}//${url.host}`
+    }
+  } catch {
+    return {
+      host: fallbackHost,
+      port: fallbackPort,
+      origin: `http://${fallbackHost}:${fallbackPort}`
+    }
+  }
+}
+
+const AITUBER_STATUS_TARGET = httpServiceTargetFromUrl(
+  AITUBER_URL,
+  AITUBER_HOST,
+  AITUBER_PORT
+)
+
 const PUBLIC_DIR = path.join(__dirname, 'public')
 const PID_FILE = path.join(STATE_DIR, 'pids.json')
 const MEDIAPIPE_STATUS_FILE = path.join(STATE_DIR, 'mediapipe-status.json')
@@ -94,7 +165,6 @@ const HOME_ACTION_EVENTS_FILE = path.join(
   'home_control',
   'events.jsonl'
 )
-const DIFY_CHAT_EVENTS_FILE = path.join(STATE_DIR, 'dify-chat-events.jsonl')
 const THOUGHT_CORE_CHAT_EVENTS_FILE = path.join(
   STATE_DIR,
   'thought-core-chat-events.jsonl'
@@ -250,7 +320,7 @@ const readPidMap = () => {
   return map
 }
 
-const checkTcp = (port, host = '127.0.0.1', timeoutMs = 900) =>
+const checkTcp = (port, host = DEFAULT_HOSTS.loopback, timeoutMs = 900) =>
   new Promise((resolve) => {
     const socket = new net.Socket()
     let settled = false
@@ -286,7 +356,11 @@ const createMaskedWebSocketCloseFrame = () => {
   ])
 }
 
-const checkWebSocketHandshake = (port, host = '127.0.0.1', timeoutMs = 900) =>
+const checkWebSocketHandshake = (
+  port,
+  host = DEFAULT_HOSTS.loopback,
+  timeoutMs = 900
+) =>
   new Promise((resolve) => {
     const socket = new net.Socket()
     const key = crypto.randomBytes(16).toString('base64')
@@ -385,7 +459,7 @@ const checkHttp = (urlString, timeoutMs = 1600, jsonHealth = false) =>
               if (Object.prototype.hasOwnProperty.call(parsed, 'ok')) {
                 ok = Boolean(parsed.ok)
               }
-              detail = JSON.stringify(parsed)
+              detail = ok ? 'health ok' : 'health unavailable'
             } catch {
               ok = false
               detail = `HTTP ${statusCode}, invalid JSON`
@@ -482,20 +556,64 @@ const makeService = ({
   tcp,
   http,
   requireHttp = false,
+  processOnlyOk = false,
   detail = ''
 }) => {
   const processAlive = isProcessAlive(Number(entry?.pid))
   const tcpOk = Boolean(tcp?.ok)
   const httpOk = Boolean(http?.ok)
+  const processOnlyHealthy = processOnlyOk && processAlive && !tcpOk && !httpOk
   return {
     name,
-    state: serviceState({ processAlive, tcpOk, httpOk, requireHttp }),
+    state: processOnlyHealthy
+      ? 'OK'
+      : serviceState({ processAlive, tcpOk, httpOk, requireHttp }),
     processAlive,
     pid: Number(entry?.pid) || null,
     tcp: tcp || { ok: false, detail: '-' },
     http: http || { ok: false, detail: '-' },
     detail
   }
+}
+
+const summarizeThoughtCoreTcpProbe = (probe) => {
+  if (!probe) {
+    return { ok: false, detail: 'tcp unavailable' }
+  }
+  const latencyMs = Number.isFinite(probe.latencyMs) ? probe.latencyMs : undefined
+  if (probe.ok) {
+    return { ok: true, detail: 'tcp listening', latencyMs }
+  }
+  const detail = String(probe.detail || '').toLowerCase()
+  return {
+    ok: false,
+    detail: detail.includes('timeout') ? 'timeout' : 'tcp unavailable'
+  }
+}
+
+const summarizeThoughtCoreHealthProbe = (probe) => {
+  if (!probe) {
+    return { ok: false, statusCode: null, detail: 'health unavailable' }
+  }
+  const statusCode = Number.isInteger(probe.statusCode) ? probe.statusCode : null
+  const latencyMs = Number.isFinite(probe.latencyMs) ? probe.latencyMs : undefined
+  if (probe.ok) {
+    return { ok: true, statusCode, detail: 'health ok', latencyMs }
+  }
+  if (Number.isInteger(probe.statusCode) && probe.statusCode > 0) {
+    return { ok: false, statusCode, detail: `HTTP ${probe.statusCode}`, latencyMs }
+  }
+  const detail = String(probe.detail || '').toLowerCase()
+  if (detail.includes('timeout')) {
+    return { ok: false, statusCode, detail: 'timeout', latencyMs }
+  }
+  if (detail.includes('invalid json')) {
+    return { ok: false, statusCode, detail: 'invalid JSON', latencyMs }
+  }
+  if (detail.includes('invalid url')) {
+    return { ok: false, statusCode, detail: 'invalid url', latencyMs }
+  }
+  return { ok: false, statusCode, detail: 'health unavailable', latencyMs }
 }
 
 const serviceFromIndicatorNode = (node, fallback) => {
@@ -589,9 +707,6 @@ const readRecentJsonlEvents = (filePath, limit = 8) => {
 
 const readRecentHomeActionEvents = (limit = 8) =>
   readRecentJsonlEvents(HOME_ACTION_EVENTS_FILE, limit)
-
-const readRecentDifyChatEvents = (limit = 8) =>
-  readRecentJsonlEvents(DIFY_CHAT_EVENTS_FILE, limit)
 
 const readRecentThoughtCoreChatEvents = (limit = 8) =>
   readRecentJsonlEvents(THOUGHT_CORE_CHAT_EVENTS_FILE, limit)
@@ -774,8 +889,8 @@ const mediapipeStatusFromEnvironment = (environmentIndicators, fallbackStatus) =
     running: cameraOpened && !sourceStale,
     capture: sourceStale ? 'Stale' : cameraOpened ? 'Running' : 'Stopped',
     websocket: sourceStale
-      ? `stale via Environment / Camera Hub ws://127.0.0.1:${MEDIAPIPE_PORT}`
-      : `fresh via Environment / Camera Hub ws://127.0.0.1:${MEDIAPIPE_PORT}`,
+      ? `stale via Environment / Camera Hub ws://${MEDIAPIPE_HOST}:${MEDIAPIPE_PORT}`
+      : `fresh via Environment / Camera Hub ws://${MEDIAPIPE_HOST}:${MEDIAPIPE_PORT}`,
     clients: 'environment_state_server',
     fps: Number.isFinite(fps) ? fps.toFixed(1) : '-',
     primary_gesture: gestureDisplayName(primary),
@@ -799,19 +914,11 @@ const mediapipeStatusFromEnvironment = (environmentIndicators, fallbackStatus) =
   }
 }
 
-const tagChatEvents = (events, source) =>
-  events.map((event) => ({
-    ...event,
-    source
-  }))
-
-const latestChatEvent = (difyEvents, thoughtCoreEvents) => {
-  const candidates = [
-    ...tagChatEvents(difyEvents, 'dify'),
-    ...tagChatEvents(thoughtCoreEvents, 'thought-core')
-  ]
+const latestChatEvent = (thoughtCoreEvents) => {
+  const candidates = thoughtCoreEvents
     .map((event) => ({
       ...event,
+      source: 'thought-core',
       timestamp_ms: Date.parse(event.timestamp || '')
     }))
     .filter((event) => Number.isFinite(event.timestamp_ms))
@@ -819,11 +926,9 @@ const latestChatEvent = (difyEvents, thoughtCoreEvents) => {
   return candidates[candidates.length - 1] || null
 }
 
-const chatSourceLabel = (event) =>
-  event?.source === 'thought-core' ? 'Thought Core' : 'Dify'
+const chatSourceLabel = () => 'Thought Core'
 
-const chatSourceStage = (event) =>
-  event?.source === 'thought-core' ? 'THOUGHT_CORE' : 'DIFY'
+const chatSourceStage = () => 'THOUGHT_CORE'
 
 const summarizePipeline = (lastChatEvent, lastHomeEvent) => {
   if (!lastChatEvent) {
@@ -909,13 +1014,11 @@ const summarizePipeline = (lastChatEvent, lastHomeEvent) => {
   }
 
   return {
-    stage: 'DIFY_OK_WAITING_HOME_ACTION',
+    stage: `${sourceStage}_RECORDED`,
     source: lastChatEvent.source,
     event: lastChatEvent.event,
     detail:
-      lastChatEvent.event === 'stream_opened'
-        ? 'Dify stream opened; waiting for workflow/tool side effect.'
-        : lastChatEvent.query || `Dify event: ${lastChatEvent.event}`,
+      lastChatEvent.query || `${sourceLabel} event: ${lastChatEvent.event}`,
     updated_at: lastChatEvent.timestamp || null
   }
 }
@@ -939,26 +1042,34 @@ const getStatus = async ({ debugTraces = false } = {}) => {
     environmentHttp,
     aituberTcp,
     aituberHttp,
-    difyTcp,
-    difyHttp,
     voicevoxTcp,
     voicevoxHttp,
+    thoughtCoreTcp,
+    thoughtCoreHttp,
     mediapipeWebSocket
   ] = await Promise.all([
-    checkTcp(8787),
-    checkHttp('http://127.0.0.1:8787/health', 2500, true),
-    checkTcp(ENVIRONMENT_STATE_PORT),
-    checkHttp(`http://127.0.0.1:${ENVIRONMENT_STATE_PORT}/health`, 1800, true),
-    checkTcp(3000),
-    checkHttp('http://127.0.0.1:3000', 1800),
-    checkTcp(8080),
-    checkHttp('http://127.0.0.1:8080', 1800),
+    checkTcp(HOME_ASSISTANT_BRIDGE_PORT, HOME_ASSISTANT_BRIDGE_HOST),
+    checkHttp(
+      `http://${HOME_ASSISTANT_BRIDGE_HOST}:${HOME_ASSISTANT_BRIDGE_PORT}/health`,
+      2500,
+      true
+    ),
+    checkTcp(ENVIRONMENT_STATE_PORT, ENVIRONMENT_STATE_HOST),
+    checkHttp(
+      `http://${ENVIRONMENT_STATE_HOST}:${ENVIRONMENT_STATE_PORT}/health`,
+      1800,
+      true
+    ),
+    checkTcp(AITUBER_STATUS_TARGET.port, AITUBER_STATUS_TARGET.host),
+    checkHttp(AITUBER_STATUS_TARGET.origin, 1800),
     checkTcp(voicevoxPort),
     checkHttp(`${voicevoxUrl.replace(/\/$/, '')}/version`, 1800),
-    checkWebSocketHandshake(MEDIAPIPE_PORT)
+    checkTcp(THOUGHT_CORE_PORT, THOUGHT_CORE_HOST),
+    checkHttp(`http://${THOUGHT_CORE_HOST}:${THOUGHT_CORE_PORT}/health`, 1800, true),
+    checkWebSocketHandshake(MEDIAPIPE_PORT, MEDIAPIPE_HOST)
   ])
   const environmentIndicators = await fetchJson(
-    `http://127.0.0.1:${ENVIRONMENT_STATE_PORT}/indicators/current`,
+    `http://${ENVIRONMENT_STATE_HOST}:${ENVIRONMENT_STATE_PORT}/indicators/current`,
     1200
   )
 
@@ -1007,7 +1118,7 @@ const getStatus = async ({ debugTraces = false } = {}) => {
       tcp: mediapipeTcp,
       http: { ok: false, detail: '-' },
       detail: mediapipeTcp.ok
-        ? `ws://127.0.0.1:${MEDIAPIPE_PORT} listening`
+        ? `ws://${MEDIAPIPE_HOST}:${MEDIAPIPE_PORT} listening`
         : 'waiting for MediaPipe WebSocket'
     }),
     aituber_kit: makeService({
@@ -1017,19 +1128,33 @@ const getStatus = async ({ debugTraces = false } = {}) => {
       http: aituberHttp,
       requireHttp: true
     }),
-    dify: makeService({
-      name: 'dify',
-      entry: null,
-      tcp: difyTcp,
-      http: difyHttp,
-      requireHttp: true
-    }),
     voicevox: makeService({
       name: 'voicevox',
       entry: null,
       tcp: voicevoxTcp,
       http: voicevoxHttp,
       requireHttp: true
+    })
+  }
+  const thoughtCoreApiTelemetryPresent =
+    Boolean(pids.thought_core_api) ||
+    Boolean(thoughtCoreTcp?.ok) ||
+    Boolean(thoughtCoreHttp?.ok)
+  if (thoughtCoreApiTelemetryPresent) {
+    services.thought_core_api = makeService({
+      name: 'thought_core_api',
+      entry: pids.thought_core_api,
+      tcp: summarizeThoughtCoreTcpProbe(thoughtCoreTcp),
+      http: summarizeThoughtCoreHealthProbe(thoughtCoreHttp),
+      requireHttp: true
+    })
+  }
+  if (pids.thought_core_watcher) {
+    services.thought_core_watcher = makeService({
+      name: 'thought_core_watcher',
+      entry: pids.thought_core_watcher,
+      processOnlyOk: true,
+      detail: 'process-only watcher telemetry'
     })
   }
   if (
@@ -1042,14 +1167,10 @@ const getStatus = async ({ debugTraces = false } = {}) => {
   }
 
   const rawEvents = readRecentHomeActionEvents()
-  const rawDifyEvents = readRecentDifyChatEvents()
   const rawThoughtCoreEvents = readRecentThoughtCoreChatEvents()
   const rawConversationEntries = readRecentConversationLog()
   const events = rawEvents.map((event) =>
     sanitizeHomeActionEvent(event, debugTraces)
-  )
-  const difyEvents = rawDifyEvents.map((event) =>
-    sanitizeChatEvent(event, debugTraces)
   )
   const thoughtCoreEvents = rawThoughtCoreEvents.map((event) =>
     sanitizeChatEvent(event, debugTraces)
@@ -1058,12 +1179,11 @@ const getStatus = async ({ debugTraces = false } = {}) => {
     sanitizeConversationEntry(entry, debugTraces)
   )
   const lastEvent = events[events.length - 1] || null
-  const lastDifyEvent = difyEvents[difyEvents.length - 1] || null
   const lastThoughtCoreEvent =
     thoughtCoreEvents[thoughtCoreEvents.length - 1] || null
   const lastConversationEntry =
     conversationEntries[conversationEntries.length - 1] || null
-  const lastAiEvent = latestChatEvent(difyEvents, thoughtCoreEvents)
+  const lastAiEvent = latestChatEvent(thoughtCoreEvents)
   const rawLastEvent = rawEvents[rawEvents.length - 1] || null
   const lastEventAt = rawLastEvent?.timestamp
     ? Date.parse(rawLastEvent.timestamp)
@@ -1101,10 +1221,6 @@ const getStatus = async ({ debugTraces = false } = {}) => {
     homeActions: {
       events,
       lastEvent
-    },
-    difyChat: {
-      events: difyEvents,
-      lastEvent: lastDifyEvent
     },
     thoughtCoreChat: {
       events: thoughtCoreEvents,
@@ -1303,6 +1419,6 @@ server.listen(PORT, HOST, () => {
   console.log(`State dir: ${STATE_DIR}`)
   console.log(`TouchDesigner UDP: ${TOUCHDESIGNER_HOST}:${TOUCHDESIGNER_PORT}`)
   console.log(
-    `Camera Hub topics: via Environment State Server http://127.0.0.1:${ENVIRONMENT_STATE_PORT}/indicators/current`
+    `Camera Hub topics: via Environment State Server http://${ENVIRONMENT_STATE_HOST}:${ENVIRONMENT_STATE_PORT}/indicators/current`
   )
 })

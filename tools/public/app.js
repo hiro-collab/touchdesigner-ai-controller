@@ -20,13 +20,11 @@ const serviceLabels = {
   mediapipe: 'Reflex sensor',
   aituber_kit: 'Expression runtime',
   touchdesigner_control_gui: 'Display runtime',
-  dify: 'Dify compatibility',
   voicevox: 'VOICEVOX speech',
   thought_core_api: 'Thought Core API',
   thought_core_watcher: 'Thought Core watcher',
   vision_snapshot_processor: 'Vision snapshot',
 }
-const legacyServices = new Set(['dify'])
 let state = {
   fontSize: 14,
   accent: colorPresets[0],
@@ -123,9 +121,6 @@ const formatAge = (ageMs) => {
 
 const normalizeState = (value) => String(value || 'DOWN').toUpperCase()
 
-const shouldShowService = (service) =>
-  !(legacyServices.has(service?.name) && normalizeState(service?.state) === 'DOWN')
-
 const renderKv = (rows) =>
   rows
     .map(
@@ -140,21 +135,12 @@ const renderKv = (rows) =>
 
 const renderServices = (services) => {
   serviceGrid.innerHTML = Object.values(services || {})
-    .filter(shouldShowService)
-    .sort((left, right) => {
-      const leftLegacy = legacyServices.has(left.name) ? 1 : 0
-      const rightLegacy = legacyServices.has(right.name) ? 1 : 0
-      return (
-        leftLegacy - rightLegacy ||
-        String(left.name).localeCompare(String(right.name))
-      )
-    })
+    .sort((left, right) => String(left.name).localeCompare(String(right.name)))
     .map((service) => {
-      const isLegacy = legacyServices.has(service.name)
       const label = serviceLabels[service.name] || service.name
       return `
         <article
-          class="service-card${isLegacy ? ' service-legacy' : ''}"
+          class="service-card"
           data-state="${escapeHtml(service.state)}"
         >
           <span class="service-led"></span>
@@ -162,7 +148,7 @@ const renderServices = (services) => {
             ${escapeHtml(label)}
           </span>
           <span class="service-state">
-            ${escapeHtml(isLegacy ? `${service.state} / compatibility` : service.state)}
+            ${escapeHtml(service.state)}
           </span>
         </article>
       `
@@ -212,7 +198,7 @@ const normalizeFrameUrl = (url) => {
 }
 
 const renderAituberFrame = (payload) => {
-  const url = payload?.url || 'http://127.0.0.1:3000'
+  const url = payload?.url || 'about:blank'
   const normalizedUrl = normalizeFrameUrl(url)
   const currentUrl =
     aituberFrame.src && aituberFrame.src !== 'about:blank'
