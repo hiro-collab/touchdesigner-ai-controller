@@ -162,12 +162,20 @@ const AITUBER_STATUS_TARGET = httpServiceTargetFromUrl(
 const PUBLIC_DIR = path.join(__dirname, 'public')
 const PID_FILE = path.join(STATE_DIR, 'pids.json')
 const MEDIAPIPE_STATUS_FILE = path.join(STATE_DIR, 'mediapipe-status.json')
-const HOME_ACTION_EVENTS_FILE = path.join(
-  WORKSPACE_ROOT,
-  'home-assistant-server',
-  '.cache',
-  'home_control',
-  'events.jsonl'
+const HOME_ACTION_EVENTS_FILE = path.resolve(
+  readArg(
+    '--home-action-events-file',
+    process.env.HOME_ACTION_EVENTS_FILE ||
+      path.join(
+        WORKSPACE_ROOT,
+        'organs',
+        'action',
+        'home-assistant-server',
+        '.cache',
+        'home_control',
+        'events.jsonl'
+      )
+  )
 )
 const THOUGHT_CORE_CHAT_EVENTS_FILE = path.join(
   STATE_DIR,
@@ -1225,6 +1233,10 @@ const getStatus = async ({ debugTraces = false } = {}) => {
     mediapipe: mediapipeStatus,
     homeActionMode: buildHomeActionMode(),
     homeActions: {
+      eventSourceSummary: localPathForStatus(
+        HOME_ACTION_EVENTS_FILE,
+        debugTraces
+      ),
       events,
       lastEvent
     },

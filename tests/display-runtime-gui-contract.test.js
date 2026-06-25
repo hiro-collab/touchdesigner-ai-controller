@@ -229,6 +229,8 @@ test('display runtime forwards home action events to TouchDesigner UDP without r
   )
   const eventsDir = path.join(
     workspaceRoot,
+    'organs',
+    'action',
     'home-assistant-server',
     '.cache',
     'home_control'
@@ -324,6 +326,11 @@ test('display runtime forwards home action events to TouchDesigner UDP without r
     assert.equal(response.statusCode, 200)
     assert.equal(response.body.magic.udpForward.forwarded, true)
     assert.equal(response.body.magic.udpForward.actionId, 'light_on')
+    assert.equal(
+      response.body.homeActions.eventSourceSummary.label,
+      'events.jsonl'
+    )
+    assert.equal(response.body.homeActions.eventSourceSummary.trace_redacted, true)
     assert.equal(udpSends.length, 2)
     assert.equal(udpSends[0].host, '127.0.0.1')
     assert.equal(udpSends[0].port, 19001)
