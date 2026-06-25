@@ -110,6 +110,10 @@ const TOUCHDESIGNER_PORT = parseIntArg(
   '--touchdesigner-port',
   Number(process.env.TOUCHDESIGNER_UDP_PORT || DEFAULT_PORTS.touchdesignerUdp)
 )
+const TOUCHDESIGNER_HOME_ACTION_POLL_MS = parseIntArg(
+  '--touchdesigner-home-action-poll-ms',
+  Number(process.env.TOUCHDESIGNER_HOME_ACTION_POLL_MS || 1000)
+)
 const STATE_DIR = path.resolve(
   process.env.HOME_CONTROL_STACK_STATE_DIR ||
     path.join(WORKSPACE_ROOT, '.cache', 'home-control-stack')
@@ -1167,6 +1171,8 @@ const getStatus = async ({ debugTraces = false } = {}) => {
   }
 
   const rawEvents = readRecentHomeActionEvents()
+  const touchDesignerHomeActionForward =
+    await forwardLatestHomeActionToTouchDesigner(rawEvents)
   const rawThoughtCoreEvents = readRecentThoughtCoreChatEvents()
   const rawConversationEntries = readRecentConversationLog()
   const events = rawEvents.map((event) =>
@@ -1237,6 +1243,7 @@ const getStatus = async ({ debugTraces = false } = {}) => {
     magic: {
       active: magicActive,
       lastActionId: rawLastEvent?.action_id || null,
+      udpForward: touchDesignerHomeActionForward,
       lastUserText: debugTraces
         ? compactTraceText(rawLastEvent?.user_text)
         : redactedTraceText(rawLastEvent?.user_text),
@@ -1266,6 +1273,95 @@ const sendTouchDesignerPacket = (socket, payload) =>
       resolve(error ? error.message : null)
     })
   })
+
+const safeUdpScalar = (value, fallback = '-') => {
+  const text = String(value || '').trim()
+  return /^[a-zA-Z0-9._:-]{1,96}$/.test(text) ? text : fallback
+}
+
+const touchDesignerForwardedHomeActionKeys = new Set()
+
+const homeActionUdpKey = (event) => {
+  if (!event || event.event !== 'execute_succeeded') {
+    return null
+  }
+  const actionId = safeUdpScalar(event.action_id, 'unknown_action')
+  const timestamp = safeUdpScalar(event.timestamp, '')
+  if (!timestamp) {
+    return null
+  }
+  return `${timestamp}:${actionId}:execute_succeeded`
+}
+
+const sendTouchDesignerHomeAction = async (event, key) => {
+  const socket = dgram.createSocket('udp4')
+  const basePayload = {
+    type: 'home_control_magic',
+    event: 'home_action_executed',
+    action_id: safeUdpScalar(event.action_id, 'unknown_action'),
+    result_class: 'execute_succeeded',
+    source: 'display_runtime_home_action_forwarder',
+    trigger: 'home_action_events_jsonl',
+    origin_event_at: safeUdpScalar(event.timestamp, null)
+  }
+  const sentPhases = []
+  let error = null
+
+  try {
+    for (const phase of ['start', 'done']) {
+      if (phase === 'done') {
+        await sleep(850)
+      }
+      const phaseError = await sendTouchDesignerPacket(socket, {
+        ...basePayload,
+        phase,
+        timestamp: nowIso()
+      })
+      if (phaseError) {
+        error = phaseError
+        break
+      }
+      sentPhases.push(phase)
+    }
+  } finally {
+    socket.close()
+  }
+
+  if (!error) {
+    touchDesignerForwardedHomeActionKeys.add(key)
+  }
+
+  return {
+    forwarded: !error,
+    host: TOUCHDESIGNER_HOST,
+    port: TOUCHDESIGNER_PORT,
+    actionId: basePayload.action_id,
+    phases: sentPhases,
+    error
+  }
+}
+
+const forwardLatestHomeActionToTouchDesigner = async (events) => {
+  const candidates = events.filter(
+    (event) => event?.event === 'execute_succeeded'
+  )
+  const latest = candidates[candidates.length - 1] || null
+  const key = homeActionUdpKey(latest)
+  if (!key) {
+    return {
+      forwarded: false,
+      reason: 'no_execute_succeeded_event'
+    }
+  }
+  if (touchDesignerForwardedHomeActionKeys.has(key)) {
+    return {
+      forwarded: false,
+      reason: 'already_forwarded',
+      actionId: safeUdpScalar(latest.action_id, 'unknown_action')
+    }
+  }
+  return sendTouchDesignerHomeAction(latest, key)
+}
 
 const sendTouchDesignerTest = async () => {
   const socket = dgram.createSocket('udp4')
@@ -1307,6 +1403,17 @@ const sendTouchDesignerTest = async () => {
     phases: sentPhases,
     error
   }
+}
+
+const pollHomeActionsForTouchDesigner = () => {
+  forwardLatestHomeActionToTouchDesigner(readRecentHomeActionEvents()).catch(
+    (error) => {
+      console.warn(
+        'TouchDesigner home action UDP forwarding skipped:',
+        error instanceof Error ? error.message : 'unknown_error'
+      )
+    }
+  )
 }
 
 const serveStatic = (request, response) => {
@@ -1421,4 +1528,11 @@ server.listen(PORT, HOST, () => {
   console.log(
     `Camera Hub topics: via Environment State Server http://${ENVIRONMENT_STATE_HOST}:${ENVIRONMENT_STATE_PORT}/indicators/current`
   )
+  if (TOUCHDESIGNER_HOME_ACTION_POLL_MS > 0) {
+    const timer = setInterval(
+      pollHomeActionsForTouchDesigner,
+      TOUCHDESIGNER_HOME_ACTION_POLL_MS
+    )
+    timer.unref?.()
+  }
 })

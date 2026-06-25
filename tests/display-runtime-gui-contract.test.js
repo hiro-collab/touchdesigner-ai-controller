@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const Module = require('node:module')
+const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 
@@ -149,6 +150,7 @@ test('display runtime UDP command route is testable with a fake UDP sender', asy
     }
     if (request === 'node:http' || request === 'http') {
       return {
+        ...originalLoad.call(this, request, parent, isMain),
         createServer(handler) {
           capturedHandler = handler
           return new FakeServer()
@@ -214,6 +216,145 @@ test('display runtime UDP command route is testable with a fake UDP sender', asy
     process.argv = originalArgv
     process.env = originalEnv
     delete require.cache[require.resolve(serverPath)]
+  }
+})
+
+test('display runtime forwards home action events to TouchDesigner UDP without raw prompt text', async () => {
+  const serverPath = path.join(__dirname, '..', 'tools', 'server.js')
+  const originalLoad = Module._load
+  const originalArgv = process.argv
+  const originalEnv = process.env
+  const workspaceRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'display-runtime-home-action-')
+  )
+  const eventsDir = path.join(
+    workspaceRoot,
+    'home-assistant-server',
+    '.cache',
+    'home_control'
+  )
+  fs.mkdirSync(eventsDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(eventsDir, 'events.jsonl'),
+    `${JSON.stringify({
+      event: 'execute_succeeded',
+      action_id: 'light_on',
+      user_text: 'raw user request must not be sent to UDP',
+      timestamp: '2026-06-25T00:00:00.000Z'
+    })}\n`,
+    'utf8'
+  )
+
+  let capturedHandler = null
+  const udpSends = []
+
+  class FakeSocket {
+    send(payload, port, host, callback) {
+      udpSends.push({
+        payload: JSON.parse(Buffer.from(payload).toString('utf8')),
+        port,
+        host
+      })
+      callback(null)
+    }
+
+    close() {}
+  }
+
+  class FakeServer {
+    listen(_port, _host, callback) {
+      callback?.()
+      return this
+    }
+  }
+
+  Module._load = function patchedLoad(request, parent, isMain) {
+    if (request === 'node:dgram' || request === 'dgram') {
+      return {
+        createSocket(type) {
+          assert.equal(type, 'udp4')
+          return new FakeSocket()
+        }
+      }
+    }
+    if (request === 'node:http' || request === 'http') {
+      return {
+        ...originalLoad.call(this, request, parent, isMain),
+        createServer(handler) {
+          capturedHandler = handler
+          return new FakeServer()
+        }
+      }
+    }
+    return originalLoad.call(this, request, parent, isMain)
+  }
+
+  process.argv = [
+    process.argv[0],
+    serverPath,
+    '--host',
+    '127.0.0.1',
+    '--port',
+    '0',
+    '--touchdesigner-host',
+    '127.0.0.1',
+    '--touchdesigner-port',
+    '19001',
+    '--touchdesigner-home-action-poll-ms',
+    '0'
+  ]
+  process.env = {
+    ...originalEnv,
+    HOME_CONTROL_WORKSPACE_ROOT: workspaceRoot,
+    HOME_CONTROL_STACK_STATE_DIR: path.join(workspaceRoot, '.cache', 'test')
+  }
+  delete require.cache[require.resolve(serverPath)]
+
+  try {
+    require(serverPath)
+    assert.equal(typeof capturedHandler, 'function')
+
+    const response = await invokeCapturedRoute(capturedHandler, {
+      method: 'GET',
+      url: '/api/status',
+      headers: { host: '127.0.0.1' },
+      remoteAddress: '127.0.0.1'
+    })
+
+    assert.equal(response.statusCode, 200)
+    assert.equal(response.body.magic.udpForward.forwarded, true)
+    assert.equal(response.body.magic.udpForward.actionId, 'light_on')
+    assert.equal(udpSends.length, 2)
+    assert.equal(udpSends[0].host, '127.0.0.1')
+    assert.equal(udpSends[0].port, 19001)
+    assert.equal(udpSends[0].payload.type, 'home_control_magic')
+    assert.equal(udpSends[0].payload.event, 'home_action_executed')
+    assert.equal(udpSends[0].payload.source, 'display_runtime_home_action_forwarder')
+    assert.equal(udpSends[0].payload.trigger, 'home_action_events_jsonl')
+    assert.equal(udpSends[0].payload.action_id, 'light_on')
+    assert.equal(udpSends[0].payload.result_class, 'execute_succeeded')
+    assert.equal(udpSends[0].payload.phase, 'start')
+    assert.equal(udpSends[1].payload.phase, 'done')
+    assert.equal(udpSends[0].payload.user_text, undefined)
+    assert.equal(udpSends[0].payload.detail, undefined)
+    assert.equal(udpSends[0].payload.error, undefined)
+
+    const secondResponse = await invokeCapturedRoute(capturedHandler, {
+      method: 'GET',
+      url: '/api/status',
+      headers: { host: '127.0.0.1' },
+      remoteAddress: '127.0.0.1'
+    })
+
+    assert.equal(secondResponse.body.magic.udpForward.forwarded, false)
+    assert.equal(secondResponse.body.magic.udpForward.reason, 'already_forwarded')
+    assert.equal(udpSends.length, 2)
+  } finally {
+    Module._load = originalLoad
+    process.argv = originalArgv
+    process.env = originalEnv
+    delete require.cache[require.resolve(serverPath)]
+    fs.rmSync(workspaceRoot, { recursive: true, force: true })
   }
 })
 
