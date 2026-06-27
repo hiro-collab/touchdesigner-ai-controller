@@ -1062,9 +1062,8 @@ const getStatus = async ({ debugTraces = false } = {}) => {
   ] = await Promise.all([
     checkTcp(HOME_ASSISTANT_BRIDGE_PORT, HOME_ASSISTANT_BRIDGE_HOST),
     checkHttp(
-      `http://${HOME_ASSISTANT_BRIDGE_HOST}:${HOME_ASSISTANT_BRIDGE_PORT}/health`,
-      2500,
-      true
+      `http://${HOME_ASSISTANT_BRIDGE_HOST}:${HOME_ASSISTANT_BRIDGE_PORT}/operator`,
+      1800
     ),
     checkTcp(ENVIRONMENT_STATE_PORT, ENVIRONMENT_STATE_HOST),
     checkHttp(
