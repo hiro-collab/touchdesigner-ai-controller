@@ -244,7 +244,7 @@ test('display runtime forwards home action events to TouchDesigner UDP without r
       event: 'execute_succeeded',
       action_id: 'light_on',
       user_text: 'raw user request must not be sent to UDP',
-      timestamp: '2026-06-25T00:00:00.000Z'
+      timestamp: '2026-06-25T09:00:00.000+09:00'
     })}\n`,
     'utf8'
   )
@@ -342,6 +342,7 @@ test('display runtime forwards home action events to TouchDesigner UDP without r
     assert.equal(udpSends[0].payload.trigger, 'home_action_events_jsonl')
     assert.equal(udpSends[0].payload.action_id, 'light_on')
     assert.equal(udpSends[0].payload.result_class, 'execute_succeeded')
+    assert.equal(udpSends[0].payload.origin_event_at, '2026-06-25T00:00:00.000Z')
     assert.equal(udpSends[0].payload.phase, 'start')
     assert.equal(udpSends[1].payload.phase, 'done')
     assert.equal(udpSends[0].payload.user_text, undefined)

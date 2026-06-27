@@ -1290,6 +1290,18 @@ const safeUdpScalar = (value, fallback = '-') => {
   return /^[a-zA-Z0-9._:-]{1,96}$/.test(text) ? text : fallback
 }
 
+const safeUdpTimestamp = (value, fallback = '') => {
+  const text = String(value || '').trim()
+  if (!text) {
+    return fallback
+  }
+  const parsed = Date.parse(text)
+  if (!Number.isFinite(parsed)) {
+    return fallback
+  }
+  return new Date(parsed).toISOString()
+}
+
 const touchDesignerForwardedHomeActionKeys = new Set()
 
 const homeActionUdpKey = (event) => {
@@ -1297,7 +1309,7 @@ const homeActionUdpKey = (event) => {
     return null
   }
   const actionId = safeUdpScalar(event.action_id, 'unknown_action')
-  const timestamp = safeUdpScalar(event.timestamp, '')
+  const timestamp = safeUdpTimestamp(event.timestamp)
   if (!timestamp) {
     return null
   }
@@ -1313,7 +1325,7 @@ const sendTouchDesignerHomeAction = async (event, key) => {
     result_class: 'execute_succeeded',
     source: 'display_runtime_home_action_forwarder',
     trigger: 'home_action_events_jsonl',
-    origin_event_at: safeUdpScalar(event.timestamp, null)
+    origin_event_at: safeUdpTimestamp(event.timestamp, null)
   }
   const sentPhases = []
   let error = null
@@ -1361,7 +1373,9 @@ const forwardLatestHomeActionToTouchDesigner = async (events) => {
   if (!key) {
     return {
       forwarded: false,
-      reason: 'no_execute_succeeded_event'
+      reason: latest
+        ? 'invalid_execute_succeeded_event_key'
+        : 'no_execute_succeeded_event'
     }
   }
   if (touchDesignerForwardedHomeActionKeys.has(key)) {
