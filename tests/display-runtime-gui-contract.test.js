@@ -547,10 +547,20 @@ test('display runtime forwards one bounded correlated motion pair and fails clos
     }
     assert.equal(harness.udpSends.length, 6)
 
+    const delayedProviderStream =
+      await harness.runtime.forwardLatestMotionToTouchDesigner(
+        buildMotionJournalEvents({
+          conversationAttemptRef: validRef,
+          timestamp: new Date(Date.now() - 25000).toISOString(),
+          suffix: 'delayed_provider_stream'
+        })
+      )
+    assert.equal(delayedProviderStream.forwarded, true)
+
     const stale = await harness.runtime.forwardLatestMotionToTouchDesigner(
       buildMotionJournalEvents({
         conversationAttemptRef: validRef,
-        timestamp: new Date(Date.now() - 20000).toISOString(),
+        timestamp: new Date(Date.now() - 40000).toISOString(),
         suffix: 'stale'
       })
     )
@@ -589,7 +599,7 @@ test('display runtime forwards one bounded correlated motion pair and fails clos
           : 'phase_event_identity_mismatch'
       )
     }
-    assert.equal(harness.udpSends.length, 6)
+    assert.equal(harness.udpSends.length, 8)
 
     const routineStatusEvent = harness.runtime.sanitizeChatEvent(
       {

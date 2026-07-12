@@ -122,7 +122,7 @@ const TOUCHDESIGNER_MOTION_EVENT_MAX_AGE_MS = Math.max(
   1000,
   parseIntArg(
     '--touchdesigner-motion-event-max-age-ms',
-    Number(process.env.TOUCHDESIGNER_MOTION_EVENT_MAX_AGE_MS || 15000)
+    Number(process.env.TOUCHDESIGNER_MOTION_EVENT_MAX_AGE_MS || 35000)
   )
 )
 const TOUCHDESIGNER_MOTION_EVENT_FUTURE_TOLERANCE_MS = 2000
