@@ -368,6 +368,272 @@ test('display runtime forwards home action events to TouchDesigner UDP without r
   }
 })
 
+test('display runtime forwards one bounded correlated motion pair and fails closed on mutations', async () => {
+  const harness = loadDisplayRuntimeMotionHarness()
+  const validRef = `m4.prepared_sample_attempt:${'a'.repeat(32)}`
+  const changedRef = `m4.prepared_sample_attempt:${'b'.repeat(32)}`
+  const now = new Date().toISOString()
+  const validEvents = buildMotionJournalEvents({
+    conversationAttemptRef: validRef,
+    timestamp: now,
+    suffix: 'valid'
+  })
+  const genuineAitMotionSummary = validEvents[0].notable_events[1]
+  assert.equal(genuineAitMotionSummary.type, 'motion.requested')
+  assert.equal(
+    genuineAitMotionSummary.summary.trace.event_id,
+    genuineAitMotionSummary.event_id
+  )
+  assert.deepEqual(
+    {
+      phase: genuineAitMotionSummary.summary.phase,
+      lifecycle_state: genuineAitMotionSummary.summary.lifecycle_state,
+      safe_visible_state: genuineAitMotionSummary.summary.safe_visible_state
+    },
+    {
+      phase: 'queued',
+      lifecycle_state: 'queued',
+      safe_visible_state: 'requested'
+    }
+  )
+
+  try {
+    const forwarded = await harness.runtime.forwardLatestMotionToTouchDesigner(
+      validEvents
+    )
+    assert.deepEqual(forwarded, {
+      forwarded: true,
+      class: 'correlated_motion_event',
+      eventId: 'evt_valid',
+      motionEventId: 'mot_evt_valid',
+      phases: ['start', 'done'],
+      error: null
+    })
+    assert.equal(harness.udpSends.length, 2)
+    assert.deepEqual(
+      harness.udpSends.map((entry) => entry.payload.phase),
+      ['start', 'done']
+    )
+
+    const startPayload = harness.udpSends[0].payload
+    assert.deepEqual(Object.keys(startPayload).sort(), [
+      'conversation_attempt_ref',
+      'event',
+      'event_id',
+      'motion_event_id',
+      'motion_requested_at',
+      'origin_event_at',
+      'phase',
+      'source',
+      'stimulus_id',
+      'stimulus_instance_id',
+      'timestamp',
+      'type'
+    ])
+    assert.equal(startPayload.type, 'conversation_motion')
+    assert.equal(startPayload.event, 'motion_requested')
+    assert.equal(
+      startPayload.source,
+      'display_runtime_motion_event_forwarder'
+    )
+    assert.equal(startPayload.conversation_attempt_ref, validRef)
+    assert.equal(startPayload.event_id, 'evt_valid')
+    assert.equal(startPayload.motion_event_id, 'mot_evt_valid')
+    assert.equal(startPayload.origin_event_at, now)
+    assert.equal(startPayload.motion_requested_at, now)
+    assert.equal(startPayload.user_text, undefined)
+    assert.equal(startPayload.provider_payload, undefined)
+    assert.equal(startPayload.private_path, undefined)
+    assert.equal(startPayload.media, undefined)
+    assert.equal(startPayload.arbitrary_payload, undefined)
+
+    const duplicate = await harness.runtime.forwardLatestMotionToTouchDesigner(
+      validEvents
+    )
+    assert.equal(duplicate.forwarded, false)
+    assert.equal(duplicate.reason, 'already_forwarded')
+    assert.equal(harness.udpSends.length, 2)
+
+    const changed = await harness.runtime.forwardLatestMotionToTouchDesigner(
+      buildMotionJournalEvents({
+        conversationAttemptRef: changedRef,
+        timestamp: new Date().toISOString(),
+        suffix: 'valid'
+      })
+    )
+    assert.equal(changed.forwarded, false)
+    assert.equal(changed.reason, 'identity_ref_changed')
+    assert.equal(harness.udpSends.length, 2)
+
+    const formerlyCollidingTupleA = buildMotionJournalEvents({
+      conversationAttemptRef: validRef,
+      timestamp: new Date().toISOString(),
+      suffix: 'colon_tuple_a',
+      eventId: 'evt:alpha',
+      motionEventId: 'mot',
+      stimulusId: 'stim',
+      stimulusInstanceId: 'inst'
+    })
+    const formerlyCollidingTupleB = buildMotionJournalEvents({
+      conversationAttemptRef: validRef,
+      timestamp: new Date().toISOString(),
+      suffix: 'colon_tuple_b',
+      eventId: 'evt',
+      motionEventId: 'alpha:mot',
+      stimulusId: 'stim',
+      stimulusInstanceId: 'inst'
+    })
+    const oldColonIdentity = (events) => {
+      const event = events[0].notable_events[1]
+      return [
+        event.event_id,
+        event.summary.motion_event_id,
+        event.summary.stimulus_id,
+        event.summary.stimulus_instance_id
+      ].join(':')
+    }
+    assert.equal(
+      oldColonIdentity(formerlyCollidingTupleA),
+      oldColonIdentity(formerlyCollidingTupleB)
+    )
+    const tupleAForward =
+      await harness.runtime.forwardLatestMotionToTouchDesigner(
+        formerlyCollidingTupleA
+      )
+    assert.equal(tupleAForward.forwarded, true)
+    assert.equal(harness.udpSends.length, 4)
+
+    const tupleADuplicate =
+      await harness.runtime.forwardLatestMotionToTouchDesigner(
+        formerlyCollidingTupleA
+      )
+    assert.equal(tupleADuplicate.forwarded, false)
+    assert.equal(tupleADuplicate.reason, 'already_forwarded')
+    assert.equal(harness.udpSends.length, 4)
+
+    const tupleBForward =
+      await harness.runtime.forwardLatestMotionToTouchDesigner(
+        formerlyCollidingTupleB
+      )
+    assert.equal(tupleBForward.forwarded, true)
+    assert.equal(harness.udpSends.length, 6)
+
+    const tupleBDuplicate =
+      await harness.runtime.forwardLatestMotionToTouchDesigner(
+        formerlyCollidingTupleB
+      )
+    assert.equal(tupleBDuplicate.forwarded, false)
+    assert.equal(tupleBDuplicate.reason, 'already_forwarded')
+    assert.equal(harness.udpSends.length, 6)
+
+    const rejectedRefs = [
+      undefined,
+      'm4.prepared_sample_attempt:not-hex',
+      'PRIVATE:m4.prepared_sample_attempt:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      'C:\\private\\m4.prepared_sample_attempt:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    ]
+    for (const [index, conversationAttemptRef] of rejectedRefs.entries()) {
+      const result =
+        await harness.runtime.forwardLatestMotionToTouchDesigner(
+          buildMotionJournalEvents({
+            conversationAttemptRef,
+            timestamp: new Date().toISOString(),
+            suffix: `bad_ref_${index}`,
+            wrapperConversationAttemptRef: validRef
+          })
+        )
+      assert.equal(result.forwarded, false)
+      assert.equal(result.reason, 'invalid_conversation_attempt_ref')
+    }
+    assert.equal(harness.udpSends.length, 6)
+
+    const stale = await harness.runtime.forwardLatestMotionToTouchDesigner(
+      buildMotionJournalEvents({
+        conversationAttemptRef: validRef,
+        timestamp: new Date(Date.now() - 20000).toISOString(),
+        suffix: 'stale'
+      })
+    )
+    assert.equal(stale.forwarded, false)
+    assert.equal(stale.reason, 'stale_motion_event')
+
+    const future = await harness.runtime.forwardLatestMotionToTouchDesigner(
+      buildMotionJournalEvents({
+        conversationAttemptRef: validRef,
+        timestamp: new Date(Date.now() + 3000).toISOString(),
+        suffix: 'future'
+      })
+    )
+    assert.equal(future.forwarded, false)
+    assert.equal(future.reason, 'future_motion_event')
+
+    for (const overrides of [
+      { phase: 'requested', suffix: 'wrong_phase' },
+      { lifecycleState: 'request_issued', suffix: 'wrong_lifecycle' },
+      { traceEventId: 'evt_other', suffix: 'wrong_event_identity' },
+      { motionEventId: 'x'.repeat(97), suffix: 'oversized_motion_id' }
+    ]) {
+      const result =
+        await harness.runtime.forwardLatestMotionToTouchDesigner(
+          buildMotionJournalEvents({
+            conversationAttemptRef: validRef,
+            timestamp: new Date().toISOString(),
+            ...overrides
+          })
+      )
+      assert.equal(result.forwarded, false)
+      assert.equal(
+        result.reason,
+        overrides.motionEventId
+          ? 'invalid_motion_identity'
+          : 'phase_event_identity_mismatch'
+      )
+    }
+    assert.equal(harness.udpSends.length, 6)
+
+    const routineStatusEvent = harness.runtime.sanitizeChatEvent(
+      {
+        ...validEvents[0],
+        query: 'SECRET_QUERY_TEXT',
+        provider_payload: 'SECRET_PROVIDER_PAYLOAD',
+        private_path: 'C:\\private\\secret.txt',
+        media: 'SECRET_MEDIA',
+        arbitrary_payload: { prompt: 'SECRET_NESTED_PROMPT' }
+      },
+      false
+    )
+    const serializedStatus = JSON.stringify(routineStatusEvent)
+    assert.equal(routineStatusEvent.notable_events, undefined)
+    for (const forbidden of [
+      'SECRET_QUERY_TEXT',
+      'SECRET_PROVIDER_PAYLOAD',
+      'secret.txt',
+      'SECRET_MEDIA',
+      'SECRET_NESTED_PROMPT'
+    ]) {
+      assert.doesNotMatch(serializedStatus, new RegExp(forbidden))
+      assert.doesNotMatch(
+        JSON.stringify(harness.udpSends),
+        new RegExp(forbidden)
+      )
+    }
+  } finally {
+    harness.cleanup()
+  }
+})
+
+test('display runtime keeps correlated motion distinct from Home Control and manual ping', () => {
+  const source = readSource('tools', 'server.js')
+
+  assert.match(source, /type: 'conversation_motion'/)
+  assert.match(source, /event: 'motion_requested'/)
+  assert.match(source, /source: 'display_runtime_motion_event_forwarder'/)
+  assert.match(source, /type: 'home_control_magic'/)
+  assert.match(source, /event: 'home_action_executed'/)
+  assert.match(source, /event: 'display_link_ping'/)
+  assert.match(source, /source: 'display_runtime_gui'/)
+})
+
 test('display runtime rejects untrusted UDP command origins before sending', async () => {
   const serverPath = path.join(__dirname, '..', 'tools', 'server.js')
   const originalLoad = Module._load
@@ -487,6 +753,144 @@ test('display runtime proxy guard falls back to socket for blank forwarded addre
     delete require.cache[require.resolve(serverPath)]
   }
 })
+
+function buildMotionJournalEvents({
+  conversationAttemptRef,
+  timestamp,
+  suffix,
+  phase = 'queued',
+  lifecycleState = 'queued',
+  traceEventId,
+  eventId: eventIdOverride,
+  motionEventId,
+  stimulusId,
+  stimulusInstanceId,
+  wrapperConversationAttemptRef
+}) {
+  const eventId = eventIdOverride || `evt_${suffix}`
+  const notableEvent = {
+    type: 'motion.requested',
+    event_id: eventId,
+    timestamp,
+    summary: {
+      schema_version: 'motion_stimulus.v0',
+      motion_event_id: motionEventId || `mot_evt_${suffix}`,
+      stimulus_id: stimulusId || `mot_stim_${suffix}`,
+      stimulus_instance_id: stimulusInstanceId || `mot_inst_${suffix}`,
+      requested_at: timestamp,
+      phase,
+      lifecycle_state: lifecycleState,
+      safe_visible_state: 'requested',
+      trace: { event_id: traceEventId || eventId },
+      raw_prompt: 'RAW_PROMPT_MUST_NOT_FORWARD',
+      provider_payload: 'PROVIDER_PAYLOAD_MUST_NOT_FORWARD',
+      private_path: 'C:\\private\\motion.json',
+      media: 'MEDIA_MUST_NOT_FORWARD',
+      arbitrary_payload: { text: 'ARBITRARY_TEXT_MUST_NOT_FORWARD' }
+    }
+  }
+  if (conversationAttemptRef !== undefined) {
+    notableEvent.conversation_attempt_ref = conversationAttemptRef
+  }
+  return [
+    {
+      event: 'stream_completed',
+      timestamp,
+      ...(wrapperConversationAttemptRef
+        ? { conversation_attempt_ref: wrapperConversationAttemptRef }
+        : {}),
+      notable_events: [
+        {
+          type: 'assistant.message',
+          conversation_attempt_ref: wrapperConversationAttemptRef,
+          summary: { text: 'LATEST_ASSISTANT_REF_MUST_NOT_BE_BORROWED' }
+        },
+        notableEvent
+      ]
+    }
+  ]
+}
+
+function loadDisplayRuntimeMotionHarness() {
+  const serverPath = path.join(__dirname, '..', 'tools', 'server.js')
+  const originalLoad = Module._load
+  const originalArgv = process.argv
+  const originalEnv = process.env
+  const udpSends = []
+
+  class FakeSocket {
+    send(payload, port, host, callback) {
+      udpSends.push({
+        payload: JSON.parse(Buffer.from(payload).toString('utf8')),
+        port,
+        host
+      })
+      callback(null)
+    }
+
+    close() {}
+  }
+
+  Module._load = function patchedLoad(request, parent, isMain) {
+    if (request === 'node:dgram' || request === 'dgram') {
+      return {
+        createSocket(type) {
+          assert.equal(type, 'udp4')
+          return new FakeSocket()
+        }
+      }
+    }
+    if (request === 'node:http' || request === 'http') {
+      return {
+        ...originalLoad.call(this, request, parent, isMain),
+        createServer() {
+          return {
+            listen(_port, _host, callback) {
+              callback?.()
+              return this
+            }
+          }
+        }
+      }
+    }
+    return originalLoad.call(this, request, parent, isMain)
+  }
+
+  process.argv = [
+    process.argv[0],
+    serverPath,
+    '--host',
+    '127.0.0.1',
+    '--port',
+    '0',
+    '--touchdesigner-host',
+    '127.0.0.1',
+    '--touchdesigner-port',
+    '19001',
+    '--touchdesigner-home-action-poll-ms',
+    '0',
+    '--touchdesigner-motion-event-poll-ms',
+    '0'
+  ]
+  process.env = {
+    ...originalEnv,
+    HOME_CONTROL_WORKSPACE_ROOT: path.join(__dirname, '..'),
+    HOME_CONTROL_STACK_STATE_DIR: path.join(__dirname, '..', '.cache', 'test')
+  }
+  delete require.cache[require.resolve(serverPath)]
+  const runtime = require(serverPath)
+
+  return {
+    runtime,
+    udpSends,
+    cleanup() {
+      Module._load = originalLoad
+      process.argv = originalArgv
+      process.env = originalEnv
+      delete require.cache[require.resolve(serverPath)]
+    }
+  }
+}
 
 function invokeCapturedRoute(handler, requestOptions) {
   return new Promise((resolve, reject) => {

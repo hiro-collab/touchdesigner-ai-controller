@@ -114,6 +114,18 @@ const TOUCHDESIGNER_HOME_ACTION_POLL_MS = parseIntArg(
   '--touchdesigner-home-action-poll-ms',
   Number(process.env.TOUCHDESIGNER_HOME_ACTION_POLL_MS || 1000)
 )
+const TOUCHDESIGNER_MOTION_EVENT_POLL_MS = parseIntArg(
+  '--touchdesigner-motion-event-poll-ms',
+  Number(process.env.TOUCHDESIGNER_MOTION_EVENT_POLL_MS || 1000)
+)
+const TOUCHDESIGNER_MOTION_EVENT_MAX_AGE_MS = Math.max(
+  1000,
+  parseIntArg(
+    '--touchdesigner-motion-event-max-age-ms',
+    Number(process.env.TOUCHDESIGNER_MOTION_EVENT_MAX_AGE_MS || 15000)
+  )
+)
+const TOUCHDESIGNER_MOTION_EVENT_FUTURE_TOLERANCE_MS = 2000
 const STATE_DIR = path.resolve(
   process.env.HOME_CONTROL_STACK_STATE_DIR ||
     path.join(WORKSPACE_ROOT, '.cache', 'home-control-stack')
@@ -779,8 +791,28 @@ const sanitizeHomeActionEvent = (event, debugTraces) =>
     'error'
   ])
 
-const sanitizeChatEvent = (event, debugTraces) =>
-  sanitizeEventTrace(event, debugTraces, [
+const ROUTINE_PRIVATE_FIELD =
+  /(?:^|_)(?:answer|arbitrary|authorization|content|credential|delta|filename|media|message|password|path|private|prompt|provider|query|raw|secret|speech|text|token|transcript|utterance)(?:_|$)/i
+
+const stripRoutinePrivateFields = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => stripRoutinePrivateFields(entry))
+  }
+  if (!value || typeof value !== 'object') {
+    return value
+  }
+  const result = {}
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (ROUTINE_PRIVATE_FIELD.test(key)) {
+      continue
+    }
+    result[key] = stripRoutinePrivateFields(nestedValue)
+  }
+  return result
+}
+
+const sanitizeChatEvent = (event, debugTraces) => {
+  const sanitized = sanitizeEventTrace(event, debugTraces, [
     'query',
     'answer',
     'answer_preview',
@@ -788,6 +820,13 @@ const sanitizeChatEvent = (event, debugTraces) =>
     'status_text',
     'error'
   ])
+  if (debugTraces) {
+    return sanitized
+  }
+  const routineEvent = stripRoutinePrivateFields(sanitized)
+  delete routineEvent.notable_events
+  return routineEvent
+}
 
 const sanitizeConversationEntry = (entry, debugTraces) =>
   sanitizeEventTrace(entry, debugTraces, [
@@ -1178,9 +1217,11 @@ const getStatus = async ({ debugTraces = false } = {}) => {
   }
 
   const rawEvents = readRecentHomeActionEvents()
+  const rawThoughtCoreEvents = readRecentThoughtCoreChatEvents(32)
   const touchDesignerHomeActionForward =
     await forwardLatestHomeActionToTouchDesigner(rawEvents)
-  const rawThoughtCoreEvents = readRecentThoughtCoreChatEvents()
+  const touchDesignerMotionEventForward =
+    await forwardLatestMotionToTouchDesigner(rawThoughtCoreEvents)
   const rawConversationEntries = readRecentConversationLog()
   const events = rawEvents.map((event) =>
     sanitizeHomeActionEvent(event, debugTraces)
@@ -1241,7 +1282,8 @@ const getStatus = async ({ debugTraces = false } = {}) => {
     },
     thoughtCoreChat: {
       events: thoughtCoreEvents,
-      lastEvent: lastThoughtCoreEvent
+      lastEvent: lastThoughtCoreEvent,
+      motionUdpForward: touchDesignerMotionEventForward
     },
     conversationLog: {
       entries: conversationEntries,
@@ -1300,6 +1342,216 @@ const safeUdpTimestamp = (value, fallback = '') => {
     return fallback
   }
   return new Date(parsed).toISOString()
+}
+
+const CONVERSATION_ATTEMPT_REF_PATTERN =
+  /^m4\.prepared_sample_attempt:[0-9a-f]{32}$/
+const MOTION_REQUESTED_PHASE = 'queued'
+const MOTION_REQUESTED_LIFECYCLE_STATE = 'queued'
+const MOTION_REQUESTED_VISIBLE_STATE = 'requested'
+
+const requiredMotionUdpScalar = (value) => {
+  const text = typeof value === 'string' ? value.trim() : ''
+  return /^[a-zA-Z0-9._:-]{1,96}$/.test(text) ? text : null
+}
+
+const requiredMotionTimestamp = (value) => {
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (!text || text.length > 64) {
+    return null
+  }
+  const parsed = Date.parse(text)
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null
+}
+
+const latestNestedMotionRequestedEvent = (events) => {
+  let latest = null
+  for (const journalEvent of Array.isArray(events) ? events : []) {
+    const notableEvents = Array.isArray(journalEvent?.notable_events)
+      ? journalEvent.notable_events
+      : []
+    for (const notableEvent of notableEvents) {
+      if (notableEvent?.type === 'motion.requested') {
+        latest = notableEvent
+      }
+    }
+  }
+  return latest
+}
+
+const validateMotionRequestedEvent = (event, nowMs = Date.now()) => {
+  if (!event) {
+    return { ok: false, reason: 'no_nested_motion_requested_event' }
+  }
+
+  const conversationAttemptRef =
+    typeof event.conversation_attempt_ref === 'string'
+      ? event.conversation_attempt_ref
+      : ''
+  if (!CONVERSATION_ATTEMPT_REF_PATTERN.test(conversationAttemptRef)) {
+    return { ok: false, reason: 'invalid_conversation_attempt_ref' }
+  }
+
+  const summary =
+    event.summary && typeof event.summary === 'object' ? event.summary : null
+  const eventId = requiredMotionUdpScalar(event.event_id)
+  const motionEventId = requiredMotionUdpScalar(summary?.motion_event_id)
+  const stimulusId = requiredMotionUdpScalar(summary?.stimulus_id)
+  const stimulusInstanceId = requiredMotionUdpScalar(
+    summary?.stimulus_instance_id
+  )
+  if (!eventId || !motionEventId || !stimulusId || !stimulusInstanceId) {
+    return { ok: false, reason: 'invalid_motion_identity' }
+  }
+
+  const traceEventId = requiredMotionUdpScalar(summary?.trace?.event_id)
+  if (
+    summary?.schema_version !== 'motion_stimulus.v0' ||
+    summary?.phase !== MOTION_REQUESTED_PHASE ||
+    summary?.lifecycle_state !== MOTION_REQUESTED_LIFECYCLE_STATE ||
+    summary?.safe_visible_state !== MOTION_REQUESTED_VISIBLE_STATE ||
+    traceEventId !== eventId
+  ) {
+    return { ok: false, reason: 'phase_event_identity_mismatch' }
+  }
+
+  const originEventAt = requiredMotionTimestamp(event.timestamp)
+  const motionRequestedAt = summary?.requested_at
+    ? requiredMotionTimestamp(summary.requested_at)
+    : originEventAt
+  if (!originEventAt || !motionRequestedAt) {
+    return { ok: false, reason: 'invalid_motion_timing' }
+  }
+  const originEventMs = Date.parse(originEventAt)
+  const motionRequestedMs = Date.parse(motionRequestedAt)
+  if (
+    motionRequestedMs > originEventMs + TOUCHDESIGNER_MOTION_EVENT_FUTURE_TOLERANCE_MS ||
+    originEventMs - motionRequestedMs > TOUCHDESIGNER_MOTION_EVENT_MAX_AGE_MS
+  ) {
+    return { ok: false, reason: 'phase_event_identity_mismatch' }
+  }
+  if (originEventMs > nowMs + TOUCHDESIGNER_MOTION_EVENT_FUTURE_TOLERANCE_MS) {
+    return { ok: false, reason: 'future_motion_event' }
+  }
+  if (nowMs - originEventMs > TOUCHDESIGNER_MOTION_EVENT_MAX_AGE_MS) {
+    return { ok: false, reason: 'stale_motion_event' }
+  }
+
+  const identityTuple = [
+    eventId,
+    motionEventId,
+    stimulusId,
+    stimulusInstanceId
+  ]
+  const identityKey = JSON.stringify(identityTuple)
+  return {
+    ok: true,
+    conversationAttemptRef,
+    eventId,
+    motionEventId,
+    stimulusId,
+    stimulusInstanceId,
+    originEventAt,
+    motionRequestedAt,
+    identityKey,
+    dedupeKey: JSON.stringify([...identityTuple, conversationAttemptRef])
+  }
+}
+
+const touchDesignerMotionIdentityRefs = new Map()
+const touchDesignerAttemptedMotionKeys = new Set()
+const TOUCHDESIGNER_MOTION_DEDUPE_LIMIT = 256
+
+const rememberBoundedMotionIdentity = (motion) => {
+  while (
+    touchDesignerMotionIdentityRefs.size >= TOUCHDESIGNER_MOTION_DEDUPE_LIMIT
+  ) {
+    const oldestKey = touchDesignerMotionIdentityRefs.keys().next().value
+    touchDesignerMotionIdentityRefs.delete(oldestKey)
+  }
+  while (
+    touchDesignerAttemptedMotionKeys.size >= TOUCHDESIGNER_MOTION_DEDUPE_LIMIT
+  ) {
+    const oldestKey = touchDesignerAttemptedMotionKeys.values().next().value
+    touchDesignerAttemptedMotionKeys.delete(oldestKey)
+  }
+  touchDesignerMotionIdentityRefs.set(
+    motion.identityKey,
+    motion.conversationAttemptRef
+  )
+  touchDesignerAttemptedMotionKeys.add(motion.dedupeKey)
+}
+
+const sendTouchDesignerMotion = async (motion) => {
+  const socket = dgram.createSocket('udp4')
+  const basePayload = {
+    type: 'conversation_motion',
+    event: 'motion_requested',
+    source: 'display_runtime_motion_event_forwarder',
+    conversation_attempt_ref: motion.conversationAttemptRef,
+    event_id: motion.eventId,
+    motion_event_id: motion.motionEventId,
+    stimulus_id: motion.stimulusId,
+    stimulus_instance_id: motion.stimulusInstanceId,
+    origin_event_at: motion.originEventAt,
+    motion_requested_at: motion.motionRequestedAt
+  }
+  const sentPhases = []
+  let errorClass = null
+
+  try {
+    for (const phase of ['start', 'done']) {
+      if (phase === 'done') {
+        await sleep(850)
+      }
+      const packetError = await sendTouchDesignerPacket(socket, {
+        ...basePayload,
+        phase,
+        timestamp: nowIso()
+      })
+      if (packetError) {
+        errorClass = 'udp_send_failed'
+        break
+      }
+      sentPhases.push(phase)
+    }
+  } finally {
+    socket.close()
+  }
+
+  return {
+    forwarded: !errorClass,
+    class: 'correlated_motion_event',
+    eventId: motion.eventId,
+    motionEventId: motion.motionEventId,
+    phases: sentPhases,
+    error: errorClass
+  }
+}
+
+const forwardLatestMotionToTouchDesigner = async (events) => {
+  const motion = validateMotionRequestedEvent(
+    latestNestedMotionRequestedEvent(events)
+  )
+  if (!motion.ok) {
+    return { forwarded: false, reason: motion.reason }
+  }
+
+  const boundRef = touchDesignerMotionIdentityRefs.get(motion.identityKey)
+  if (boundRef && boundRef !== motion.conversationAttemptRef) {
+    return { forwarded: false, reason: 'identity_ref_changed' }
+  }
+  if (touchDesignerAttemptedMotionKeys.has(motion.dedupeKey)) {
+    return {
+      forwarded: false,
+      reason: 'already_forwarded',
+      eventId: motion.eventId,
+      motionEventId: motion.motionEventId
+    }
+  }
+
+  rememberBoundedMotionIdentity(motion)
+  return sendTouchDesignerMotion(motion)
 }
 
 const touchDesignerForwardedHomeActionKeys = new Set()
@@ -1441,6 +1693,16 @@ const pollHomeActionsForTouchDesigner = () => {
   )
 }
 
+const pollMotionEventsForTouchDesigner = () => {
+  forwardLatestMotionToTouchDesigner(readRecentThoughtCoreChatEvents(32)).catch(
+    () => {
+      console.warn(
+        'TouchDesigner correlated motion UDP forwarding skipped: internal_error'
+      )
+    }
+  )
+}
+
 const serveStatic = (request, response) => {
   const requestUrl = new URL(
     request.url,
@@ -1560,4 +1822,17 @@ server.listen(PORT, HOST, () => {
     )
     timer.unref?.()
   }
+  if (TOUCHDESIGNER_MOTION_EVENT_POLL_MS > 0) {
+    const timer = setInterval(
+      pollMotionEventsForTouchDesigner,
+      TOUCHDESIGNER_MOTION_EVENT_POLL_MS
+    )
+    timer.unref?.()
+  }
 })
+
+module.exports = {
+  forwardLatestMotionToTouchDesigner,
+  sanitizeChatEvent,
+  validateMotionRequestedEvent
+}
