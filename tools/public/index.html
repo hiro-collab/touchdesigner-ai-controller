@@ -49,6 +49,12 @@
           <strong>Display Runtime Controls</strong>
         </div>
         <div id="td-status" class="status-lines"></div>
+        <div class="projection-capture-controls">
+          <span class="capture-label">Separate projector output</span>
+          <span id="projection-capture-status" class="capture-status">Idle</span>
+          <button id="projection-capture-start" type="button">SELECT WINDOW</button>
+          <button id="projection-capture-stop" type="button" disabled>STOP OUTPUT</button>
+        </div>
         <div class="controls">
           <label>
             Font
@@ -81,6 +87,7 @@
       </div>
       <button id="hud-pill" class="hud-pill" type="button">HUD OFF - press H</button>
     </main>
+    <script src="/displayCaptureSession.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

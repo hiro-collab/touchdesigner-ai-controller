@@ -315,6 +315,46 @@ body.matrix-enabled #matrix-canvas {
   margin-top: 8px;
 }
 
+.projection-capture-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  align-items: center;
+  margin-top: 9px;
+  padding: 8px;
+  border: 1px solid rgba(215, 255, 243, 0.12);
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.capture-label,
+.capture-status {
+  grid-column: 1 / -1;
+}
+
+.capture-label {
+  color: var(--muted);
+  font-size: 0.76em;
+  text-transform: uppercase;
+}
+
+.capture-status {
+  color: var(--accent);
+  font-size: 0.82em;
+}
+
+.projection-capture-controls button {
+  min-height: 32px;
+  border: 1px solid var(--accent-mid);
+  background: rgba(0, 0, 0, 0.36);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.projection-capture-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .controls label {
   display: grid;
   gap: 5px;
@@ -425,6 +465,32 @@ body.hud-hidden .stage-preview-label {
 
 body.hud-hidden .hud-pill {
   display: block;
+}
+
+.projector-output {
+  display: grid;
+  place-items: center;
+  background: #000;
+}
+
+.projection-stream {
+  width: 100vw;
+  height: 100vh;
+  object-fit: contain;
+  background: #000;
+}
+
+.projector-state {
+  position: fixed;
+  right: 18px;
+  bottom: 14px;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.52);
+  font-size: 12px;
+}
+
+.projection-stream[data-streaming="true"] + .projector-state {
+  display: none;
 }
 
 @keyframes pulse {

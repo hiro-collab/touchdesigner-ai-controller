@@ -113,6 +113,24 @@ test('display HUD exposes canonical runtime services without legacy Dify groupin
   assert.match(source, /fetch\('\/api\/touchdesigner\/test', \{ method: 'POST' \}\)/)
 })
 
+test('display runtime keeps passive preview compatibility and requires an explicit capture action', () => {
+  const index = readSource('tools', 'public', 'index.html')
+  const app = readSource('tools', 'public', 'app.js')
+  const projector = readSource('tools', 'public', 'projector.js')
+
+  assert.match(index, /id="aituber-frame"/)
+  assert.match(index, /id="projection-capture-start"/)
+  assert.match(index, /id="projection-capture-stop"/)
+  assert.match(index, /displayCaptureSession\.js/)
+  assert.match(
+    app,
+    /projectionCaptureStart\.addEventListener\('click', \(\) => \{\s+projectionCaptureSession\.start\(\)\s+\}\)/
+  )
+  assert.equal((app.match(/projectionCaptureSession\.start\(\)/g) || []).length, 1)
+  assert.match(projector, /window\.opener\.location\.origin === window\.location\.origin/)
+  assert.match(projector, /window\.opener\.postMessage/)
+})
+
 test('display runtime UDP command route is testable with a fake UDP sender', async () => {
   const serverPath = path.join(__dirname, '..', 'tools', 'server.js')
   const originalLoad = Module._load

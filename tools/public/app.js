@@ -8,9 +8,38 @@ const fontSizeInput = document.getElementById('font-size')
 const accentColorInput = document.getElementById('accent-color')
 const matrixToggle = document.getElementById('matrix-toggle')
 const tdTestButton = document.getElementById('td-test')
+const projectionCaptureStart = document.getElementById('projection-capture-start')
+const projectionCaptureStop = document.getElementById('projection-capture-stop')
+const projectionCaptureStatus = document.getElementById('projection-capture-status')
 const hudPill = document.getElementById('hud-pill')
 const canvas = document.getElementById('matrix-canvas')
 const context = canvas.getContext('2d')
+
+const captureStateLabels = {
+  idle: 'Idle',
+  permission_requested: 'Choose a stage window',
+  source_selected: 'Source selected',
+  projector_waiting: 'Opening projector output',
+  streaming: 'Projector output active',
+  ended: 'Output ended',
+  error: 'Output unavailable',
+}
+
+const renderProjectionCaptureState = ({ state: captureState }) => {
+  projectionCaptureStatus.textContent = captureStateLabels[captureState] || 'Unavailable'
+  const active = captureState !== 'idle' && captureState !== 'ended' && captureState !== 'error'
+  projectionCaptureStart.disabled = active
+  projectionCaptureStop.disabled = !active
+  projectionCaptureStatus.dataset.state = captureState
+}
+
+// The passive iframe remains the compatibility route for the operator preview.
+// It can be removed only after every operator and projector consumer uses the
+// verified capture-session route and equivalent browser evidence is retained.
+const projectionCaptureSession =
+  window.DisplayCaptureSession.createDisplayCaptureSession({
+    onState: renderProjectionCaptureState,
+  })
 
 const colorPresets = ['#4cc9ff', '#ff3fd2', '#f4ff5c', '#ffffff']
 const storageKey = 'touchdesigner-ai-controller-settings'
@@ -323,6 +352,12 @@ matrixToggle.addEventListener('change', () => {
   saveState()
 })
 tdTestButton.addEventListener('click', sendTouchDesignerTest)
+projectionCaptureStart.addEventListener('click', () => {
+  projectionCaptureSession.start()
+})
+projectionCaptureStop.addEventListener('click', () => {
+  projectionCaptureSession.stop()
+})
 hudPill.addEventListener('click', toggleHud)
 window.addEventListener('resize', resetMatrix)
 
