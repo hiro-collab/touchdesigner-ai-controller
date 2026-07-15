@@ -38,6 +38,10 @@ test('display runtime defaults to passive Projection Visual for projector output
   assert.match(source, /AITUBER_PORT/)
   assert.match(source, /AITUBER_STATUS_TARGET/)
   assert.match(source, /projection-visual\?mode=passive&hud=0/)
+  assert.match(source, /AITUBER_CAPTURE_STAGE_URL/)
+  assert.match(source, /searchParams\.set\('mode', 'stage-output'\)/)
+  assert.match(source, /searchParams\.set\('hud', '0'\)/)
+  assert.match(source, /url\.search = ''/)
   assert.match(source, /process\.env\.AITUBER_URL/)
   assert.match(source, /process\.env\.NEXT_PUBLIC_AITUBER_URL/)
   assert.doesNotMatch(source, /checkTcp\(3000\)/)
@@ -122,6 +126,9 @@ test('display runtime keeps passive preview compatibility and requires an explic
   assert.match(index, /id="projection-capture-start"/)
   assert.match(index, /id="projection-capture-stop"/)
   assert.match(index, /displayCaptureSession\.js/)
+  assert.match(app, /getStageSource/)
+  assert.match(app, /captureOwnerOrigin/)
+  assert.match(app, /payload\?\.captureStageUrl \|\| null/)
   assert.match(
     app,
     /projectionCaptureStart\.addEventListener\('click', \(\) => \{\s+projectionCaptureSession\.start\(\)\s+\}\)/

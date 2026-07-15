@@ -102,6 +102,14 @@ const AITUBER_URL = readArg(
     process.env.NEXT_PUBLIC_AITUBER_URL ||
     `http://${AITUBER_HOST}:${AITUBER_PORT}/projection-visual?mode=passive&hud=0`
 )
+const AITUBER_CAPTURE_STAGE_URL = (() => {
+  const url = new URL(AITUBER_URL)
+  url.search = ''
+  url.hash = ''
+  url.searchParams.set('mode', 'stage-output')
+  url.searchParams.set('hud', '0')
+  return url.href
+})()
 const TOUCHDESIGNER_HOST = readArg(
   '--touchdesigner-host',
   process.env.TOUCHDESIGNER_UDP_HOST || DEFAULT_HOSTS.loopback
@@ -1265,7 +1273,8 @@ const getStatus = async ({ debugTraces = false } = {}) => {
       detail: 'UDP receiver cannot be health-checked; test packets can be sent.'
     },
     aituber: {
-      url: AITUBER_URL
+      url: AITUBER_URL,
+      captureStageUrl: AITUBER_CAPTURE_STAGE_URL
     },
     services,
     environment: environmentIndicators?.environment || null,

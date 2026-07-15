@@ -6,6 +6,10 @@ const test = require('node:test')
 const {
   READY_MESSAGE,
   READY_VERSION,
+  CAPTURE_SOURCE_ROLE,
+  CAPTURE_SOURCE_VERSION,
+  CAPTURE_SOURCE_READY_MESSAGE,
+  CAPTURE_SOURCE_READY_VERSION,
   createDisplayCaptureSession,
 } = require('../tools/public/displayCaptureSession.js')
 
@@ -35,7 +39,19 @@ class FakeEventTarget {
   }
 }
 
-const makeTrack = (displaySurface = 'browser') => {
+const canonicalCaptureHandle = () => ({
+  origin: 'http://127.0.0.1:3000',
+  handle: JSON.stringify({
+    role: CAPTURE_SOURCE_ROLE,
+    version: CAPTURE_SOURCE_VERSION,
+    ref: '00112233-4455-4677-8899-aabbccddeeff',
+  }),
+})
+
+const canonicalCaptureRef = '00112233-4455-4677-8899-aabbccddeeff'
+const alternateCaptureRef = '10112233-4455-4677-8899-aabbccddeeff'
+
+const makeTrack = (displaySurface = 'browser', captureHandle = canonicalCaptureHandle()) => {
   const target = new FakeEventTarget()
   return {
     ...target,
@@ -44,15 +60,27 @@ const makeTrack = (displaySurface = 'browser') => {
     removeEventListener: target.removeEventListener.bind(target),
     emit: target.emit.bind(target),
     stopCount: 0,
+    readyState: 'live',
     getSettings: () => ({ displaySurface }),
+    getCaptureHandle: () => captureHandle,
     stop() {
       this.stopCount += 1
     },
   }
 }
 
-const makeStream = ({ displaySurface = 'browser', videoCount = 1, audioCount = 0 } = {}) => {
-  const videoTracks = Array.from({ length: videoCount }, () => makeTrack(displaySurface))
+const makeStream = ({
+  displaySurface = 'browser',
+  videoCount = 1,
+  audioCount = 0,
+  captureHandle = canonicalCaptureHandle(),
+  hasCaptureHandleApi = true,
+} = {}) => {
+  const videoTracks = Array.from({ length: videoCount }, () => {
+    const track = makeTrack(displaySurface, captureHandle)
+    if (!hasCaptureHandleApi) delete track.getCaptureHandle
+    return track
+  })
   const audioTracks = Array.from({ length: audioCount }, () => makeTrack())
   return {
     videoTracks,
@@ -70,6 +98,15 @@ const makeHarness = ({
   openerMatches = true,
   userActivation = true,
   playPromise,
+  stageSource = {
+    url: 'http://127.0.0.1:3000/projection-visual?mode=stage-output&hud=0&captureOwnerOrigin=http%3A%2F%2F127.0.0.1%3A9001',
+    origin: 'http://127.0.0.1:3000',
+  },
+  now = () => 1000,
+  stageWindowBlocked = false,
+  projectorWindowBlocked = false,
+  stageReadyMode = 'valid',
+  stageReadyRef = canonicalCaptureRef,
 } = {}) => {
   const ownerWindow = new FakeEventTarget()
   ownerWindow.location = {
@@ -105,8 +142,28 @@ const makeHarness = ({
       this.closeCount += 1
     },
   }
+  const stageWindow = {
+    closed: false,
+    closeCount: 0,
+    close() {
+      this.closed = true
+      this.closeCount += 1
+    },
+  }
+  const sendStageReady = (ref = stageReadyRef) => {
+    ownerWindow.emit('message', {
+      origin: stageSource.origin,
+      source: stageWindow,
+      data: {
+        type: CAPTURE_SOURCE_READY_MESSAGE,
+        version: CAPTURE_SOURCE_READY_VERSION,
+        ref,
+      },
+    })
+  }
   const transitions = []
   const captureCalls = []
+  const stageOpenCalls = []
   let openCount = 0
   let closePoll = null
   let resolvePlayStarted
@@ -171,10 +228,54 @@ const makeHarness = ({
     },
     openWindow: () => {
       openCount += 1
-      return projectorWindow
+      return projectorWindowBlocked ? null : projectorWindow
     },
+    openStageWindow: (url) => {
+      stageOpenCalls.push(url)
+      if (stageWindowBlocked) return null
+      queueMicrotask(() => {
+        if (stageReadyMode === 'none' || stageReadyMode === 'deferred') return
+        const origin =
+          stageReadyMode === 'wrong-origin'
+            ? 'https://example.invalid'
+            : stageSource.origin
+        const source = stageReadyMode === 'wrong-source' ? {} : stageWindow
+        const data =
+          stageReadyMode === 'invalid-shape'
+            ? {
+                type: CAPTURE_SOURCE_READY_MESSAGE,
+                version: CAPTURE_SOURCE_READY_VERSION,
+                ref: stageReadyRef,
+                private: true,
+              }
+            : {
+                type: CAPTURE_SOURCE_READY_MESSAGE,
+                version: CAPTURE_SOURCE_READY_VERSION,
+                ref: stageReadyRef,
+              }
+        ownerWindow.emit('message', { origin, source, data })
+        if (stageReadyMode === 'multiple-different') {
+          ownerWindow.emit('message', {
+            origin: stageSource.origin,
+            source: stageWindow,
+            data: {
+              type: CAPTURE_SOURCE_READY_MESSAGE,
+              version: CAPTURE_SOURCE_READY_VERSION,
+              ref: alternateCaptureRef,
+            },
+          })
+        }
+        if (stageReadyMode === 'multiple-same') {
+          ownerWindow.emit('message', { origin, source, data })
+        }
+      })
+      return stageWindow
+    },
+    getStageSource: () => stageSource,
+    now,
     onState: (value) => transitions.push(value),
     projectorReadyTimeoutMs: 250,
+    stageReadyTimeoutMs: 250,
     setIntervalFn(callback) {
       closePoll = callback
       return 1
@@ -188,10 +289,13 @@ const makeHarness = ({
     controller,
     ownerWindow,
     projectorWindow,
+    stageWindow,
     video,
     stream,
     transitions,
     captureCalls,
+    stageOpenCalls,
+    sendStageReady,
     get openCount() {
       return openCount
     },
@@ -228,6 +332,290 @@ test('capture session streams one video-only browser surface and cleans exactly 
   harness.controller.stop()
   assert.equal(harness.stream.videoTracks[0].stopCount, 1)
   assert.equal(harness.projectorWindow.closeCount, 1)
+  assert.equal(harness.stageWindow.closeCount, 1)
+  assert.equal(harness.stageOpenCalls.length, 1)
+  assert.match(harness.stageOpenCalls[0], /mode=stage-output/)
+  assert.match(harness.stageOpenCalls[0], /captureOwnerOrigin=/)
+})
+
+test('capture session binds the selected handle to the exact stage popup owner', async (t) => {
+  await t.test('missing owner announcement fails closed', async () => {
+    const harness = makeHarness({ stageReadyMode: 'none' })
+    const result = await harness.controller.start()
+    assert.equal(result.result_class, 'source_owner_unconfirmed')
+    assert.equal(harness.stream.videoTracks[0].stopCount, 1)
+  })
+
+  for (const [label, stageReadyMode, resultClass] of [
+    ['wrong origin', 'wrong-origin', 'source_owner_mismatch'],
+    ['wrong source', 'wrong-source', 'source_owner_mismatch'],
+    ['extra field', 'invalid-shape', 'source_owner_invalid'],
+    ['conflicting refs', 'multiple-different', 'source_owner_changed'],
+  ]) {
+    await t.test(label, async () => {
+      const harness = makeHarness({ stageReadyMode })
+      const result = await harness.controller.start()
+      assert.equal(result.result_class, resultClass)
+      assert.equal(harness.stream.videoTracks[0].stopCount, 1)
+      assert.doesNotMatch(JSON.stringify(harness.transitions), /00112233|10112233/)
+    })
+  }
+
+  await t.test('another same-origin canonical stage ref is not accepted', async () => {
+    const harness = makeHarness({ stageReadyRef: alternateCaptureRef })
+    const result = await harness.controller.start()
+    assert.equal(result.result_class, 'source_identity_mismatch')
+    assert.equal(harness.stream.videoTracks[0].stopCount, 1)
+    assert.doesNotMatch(JSON.stringify(harness.transitions), /00112233|10112233/)
+  })
+
+  await t.test('same-ref re-announcement is idempotent', async () => {
+    const harness = makeHarness({ stageReadyMode: 'multiple-same' })
+    assert.equal((await harness.controller.start()).ok, true)
+    harness.ownerWindow.emit('message', {
+      origin: 'http://127.0.0.1:3000',
+      source: harness.stageWindow,
+      data: {
+        type: CAPTURE_SOURCE_READY_MESSAGE,
+        version: CAPTURE_SOURCE_READY_VERSION,
+        ref: canonicalCaptureRef,
+      },
+    })
+    assert.equal(harness.controller.getState().state, 'streaming')
+    harness.controller.stop()
+  })
+
+  await t.test('different post-lock owner ref terminates the stream', async () => {
+    const harness = makeHarness()
+    assert.equal((await harness.controller.start()).ok, true)
+    harness.ownerWindow.emit('message', {
+      origin: 'http://127.0.0.1:3000',
+      source: harness.stageWindow,
+      data: {
+        type: CAPTURE_SOURCE_READY_MESSAGE,
+        version: CAPTURE_SOURCE_READY_VERSION,
+        ref: alternateCaptureRef,
+      },
+    })
+    assert.deepEqual(harness.controller.getState(), {
+      state: 'idle',
+      result_class: 'source_identity_changed',
+    })
+    assert.equal(harness.stream.videoTracks[0].stopCount, 1)
+  })
+
+  await t.test('track ending while owner-ready is delayed cannot publish a late selected state', async () => {
+    const harness = makeHarness({ stageReadyMode: 'deferred' })
+    const startResult = harness.controller.start()
+    await new Promise((resolve) => setImmediate(resolve))
+    const track = harness.stream.videoTracks[0]
+    track.readyState = 'ended'
+    track.emit('ended')
+    harness.sendStageReady()
+
+    assert.deepEqual(await startResult, {
+      ok: false,
+      state: 'idle',
+      result_class: 'capture_ended',
+    })
+    assert.equal(track.stopCount, 1)
+    assert.equal(harness.stageWindow.closeCount, 1)
+    assert.equal(harness.projectorWindow.closeCount, 1)
+    assert.equal(
+      harness.transitions.some((entry) =>
+        ['source_selected', 'streaming'].includes(entry.state)
+      ),
+      false
+    )
+  })
+
+  await t.test('an initially ended selected track is a failed start with exact cleanup', async () => {
+    const stream = makeStream()
+    stream.videoTracks[0].readyState = 'ended'
+    const harness = makeHarness({ stream })
+
+    assert.deepEqual(await harness.controller.start(), {
+      ok: false,
+      state: 'idle',
+      result_class: 'capture_ended',
+    })
+    assert.equal(stream.videoTracks[0].stopCount, 1)
+    assert.equal(harness.stageWindow.closeCount, 1)
+    assert.equal(harness.projectorWindow.closeCount, 1)
+    assert.equal(
+      harness.transitions.some((entry) =>
+        ['source_selected', 'streaming'].includes(entry.state)
+      ),
+      false
+    )
+  })
+
+  await t.test('readyState ending without an event during owner wait is a failed start', async () => {
+    const harness = makeHarness({ stageReadyMode: 'deferred' })
+    const startResult = harness.controller.start()
+    await new Promise((resolve) => setImmediate(resolve))
+    harness.stream.videoTracks[0].readyState = 'ended'
+    harness.sendStageReady()
+
+    assert.deepEqual(await startResult, {
+      ok: false,
+      state: 'idle',
+      result_class: 'capture_ended',
+    })
+    assert.equal(harness.stream.videoTracks[0].stopCount, 1)
+    assert.equal(harness.stageWindow.closeCount, 1)
+    assert.equal(harness.projectorWindow.closeCount, 1)
+    assert.equal(
+      harness.transitions.some((entry) =>
+        ['source_selected', 'streaming'].includes(entry.state)
+      ),
+      false
+    )
+  })
+})
+
+test('capture session rejects missing, malformed, wrong-origin, and changed source identity', async (t) => {
+  for (const entry of [
+    ['missing API', makeStream({ hasCaptureHandleApi: false }), 'source_identity_unavailable'],
+    [
+      'wrong origin',
+      makeStream({
+        captureHandle: { ...canonicalCaptureHandle(), origin: 'http://localhost:3000' },
+      }),
+      'source_identity_unavailable',
+    ],
+    [
+      'extra field',
+      makeStream({
+        captureHandle: {
+          ...canonicalCaptureHandle(),
+          extra: 'untrusted',
+        },
+      }),
+      'source_identity_unavailable',
+    ],
+    [
+      'malformed JSON',
+      makeStream({
+        captureHandle: { origin: 'http://127.0.0.1:3000', handle: '{' },
+      }),
+      'source_identity_unavailable',
+    ],
+    [
+      'wrong role',
+      makeStream({
+        captureHandle: {
+          origin: 'http://127.0.0.1:3000',
+          handle: JSON.stringify({
+            role: 'untrusted-role',
+            version: CAPTURE_SOURCE_VERSION,
+            ref: '00112233-4455-4677-8899-aabbccddeeff',
+          }),
+        },
+      }),
+      'source_identity_unavailable',
+    ],
+    [
+      'invalid ref',
+      makeStream({
+        captureHandle: {
+          origin: 'http://127.0.0.1:3000',
+          handle: JSON.stringify({
+            role: CAPTURE_SOURCE_ROLE,
+            version: CAPTURE_SOURCE_VERSION,
+            ref: 'private/raw/ref',
+          }),
+        },
+      }),
+      'source_identity_unavailable',
+    ],
+  ]) {
+    await t.test(entry[0], async () => {
+      const harness = makeHarness({ stream: entry[1] })
+      const result = await harness.controller.start()
+      assert.equal(result.result_class, entry[2])
+      assert.equal(harness.stream.videoTracks[0].stopCount, 1)
+    })
+  }
+
+  await t.test('changed handle terminates without publishing the ref', async () => {
+    let handle = canonicalCaptureHandle()
+    const track = makeTrack('browser')
+    track.getCaptureHandle = () => handle
+    const stream = {
+      videoTracks: [track],
+      audioTracks: [],
+      getVideoTracks: () => [track],
+      getAudioTracks: () => [],
+      getTracks: () => [track],
+    }
+    const harness = makeHarness({ stream })
+    assert.equal((await harness.controller.start()).ok, true)
+    handle = {
+      ...canonicalCaptureHandle(),
+      handle: canonicalCaptureHandle().handle.replace(
+        '00112233-4455-4677-8899-aabbccddeeff',
+        '10112233-4455-4677-8899-aabbccddeeff'
+      ),
+    }
+    track.emit('capturehandlechange')
+    assert.deepEqual(harness.controller.getState(), {
+      state: 'idle',
+      result_class: 'source_identity_changed',
+    })
+    assert.doesNotMatch(JSON.stringify(harness.transitions), /00112233|10112233/)
+  })
+})
+
+test('capture session fails closed before capture for an invalid or absent stage source', async () => {
+  for (const stageSource of [
+    null,
+    { url: 'https://example.com', origin: 'https://example.com' },
+    {
+      url: 'http://127.0.0.1:3000/projection-visual?mode=stage-output&hud=0&captureOwnerOrigin=http%3A%2F%2Flocalhost%3A9001',
+      origin: 'http://127.0.0.1:3000',
+    },
+    {
+      url: 'http://user@127.0.0.1:3000/projection-visual?mode=stage-output&hud=0&captureOwnerOrigin=http%3A%2F%2F127.0.0.1%3A9001',
+      origin: 'http://127.0.0.1:3000',
+    },
+  ]) {
+    const harness = makeHarness({ stageSource })
+    const result = await harness.controller.start()
+    assert.equal(result.result_class, 'stage_source_unavailable')
+    assert.equal(harness.captureCalls.length, 0)
+  }
+})
+
+test('capture session closes only the stage window it opened when either popup is blocked', async () => {
+  const stageBlocked = makeHarness({ stageWindowBlocked: true })
+  assert.equal((await stageBlocked.controller.start()).result_class, 'stage_window_blocked')
+  assert.equal(stageBlocked.captureCalls.length, 0)
+  assert.equal(stageBlocked.projectorWindow.closeCount, 0)
+
+  const projectorBlocked = makeHarness({ projectorWindowBlocked: true })
+  assert.equal(
+    (await projectorBlocked.controller.start()).result_class,
+    'projector_window_blocked'
+  )
+  assert.equal(projectorBlocked.captureCalls.length, 0)
+  assert.equal(projectorBlocked.stageWindow.closeCount, 1)
+})
+
+test('capture session rejects a source identity selected after the bounded window', async () => {
+  let current = 0
+  const harness = makeHarness({ now: () => (current += 130000) })
+  const result = await harness.controller.start()
+  assert.equal(result.result_class, 'source_identity_stale')
+  assert.equal(harness.stream.videoTracks[0].stopCount, 1)
+})
+
+test('capture session rejects a negative source age without publishing timing data', async () => {
+  let call = 0
+  const harness = makeHarness({ now: () => (call++ === 0 ? 2000 : 1000) })
+  const result = await harness.controller.start()
+  assert.equal(result.result_class, 'source_identity_stale')
+  assert.doesNotMatch(JSON.stringify(harness.transitions), /1000|2000/)
 })
 
 test('capture session requires active user activation before opening or capture', async () => {
@@ -308,6 +696,11 @@ test('capture session deduplicates one active owner session', async () => {
       },
     },
     openWindow: () => projectorWindow,
+    openStageWindow: () => harness.stageWindow,
+    getStageSource: () => ({
+      url: 'http://127.0.0.1:3000/projection-visual?mode=stage-output&hud=0&captureOwnerOrigin=http%3A%2F%2F127.0.0.1%3A9001',
+      origin: 'http://127.0.0.1:3000',
+    }),
     userActivationActive: () => true,
   })
   const first = controller.start()

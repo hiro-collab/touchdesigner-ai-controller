@@ -14,6 +14,7 @@ const projectionCaptureStatus = document.getElementById('projection-capture-stat
 const hudPill = document.getElementById('hud-pill')
 const canvas = document.getElementById('matrix-canvas')
 const context = canvas.getContext('2d')
+let projectionCaptureStageUrl = null
 
 const captureStateLabels = {
   idle: 'Idle',
@@ -39,6 +40,16 @@ const renderProjectionCaptureState = ({ state: captureState }) => {
 const projectionCaptureSession =
   window.DisplayCaptureSession.createDisplayCaptureSession({
     onState: renderProjectionCaptureState,
+    getStageSource: () => {
+      if (!projectionCaptureStageUrl) return null
+      try {
+        const url = new URL(projectionCaptureStageUrl)
+        url.searchParams.set('captureOwnerOrigin', window.location.origin)
+        return { url: url.href, origin: url.origin }
+      } catch {
+        return null
+      }
+    },
   })
 
 const colorPresets = ['#4cc9ff', '#ff3fd2', '#f4ff5c', '#ffffff']
@@ -236,6 +247,7 @@ const renderAituberFrame = (payload) => {
   if (currentUrl !== normalizedUrl) {
     aituberFrame.src = normalizedUrl
   }
+  projectionCaptureStageUrl = payload?.captureStageUrl || null
 }
 
 const renderEvents = (events) => {
