@@ -90,7 +90,12 @@ Default bind is `127.0.0.1`.
 | Payload | JSON |
 | Typical phases | `start`, `done`, `error` |
 | Projection page | `http://127.0.0.1:3000/projection-visual` |
-| Cube background | `http://127.0.0.1:3000/cube-vault-background/` |
+| Body map inspector | `http://127.0.0.1:3000/body-map-inspector/` |
+
+The current local held `.toe` may still reference
+`/cube-vault-background/`. That compatibility route forwards to the canonical
+body map inspector. Remove it only after the local scene is manually migrated
+and both tracked and local current-consumer checks report zero references.
 
 TouchDesigner should use the UDP payload to start or fade visual effects. It should not infer Home Assistant or Dify state by itself.
 
